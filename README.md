@@ -59,10 +59,20 @@ uv run --env-file .env dbt debug --project-dir dbt --profiles-dir dbt
 # No container (mesmo código usado pelo Airflow) ou no host com `uv run --env-file .env`
 docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.yellow --period 2025-01
 docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.yellow --period 2025-01 --force
+docker compose exec airflow-scheduler nyc-mobility ingest --dataset openmeteo.era5 --period 2025-01
+docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.taxi_zones   # sem competência
 ```
 
-- O arquivo original fica em `data/landing/tlc/yellow/AAAA-MM/<sha256[:16]>/`; versões
-  republicadas coexistem, nada é sobrescrito.
+| Dataset | Tabela raw | Observações |
+|---|---|---|
+| `tlc.yellow` | `raw.tlc_yellow_trips` | Timestamps locais de NY, sem fuso, como publicados |
+| `openmeteo.era5` | `raw.openmeteo_weather_hourly` | `time_unix` em UTC; mês local de NY (DST incluído); acumulados (`precipitation`, `rain`, `snowfall`) referem-se à hora anterior |
+| `tlc.taxi_zones` | `raw.tlc_taxi_zones` | Referência versionada: só recarrega quando o hash muda |
+
+- O arquivo original fica em `data/landing/<fonte>/<dataset>/[AAAA-MM/]<sha256[:16]>/`; versões
+  republicadas coexistem, nada é sobrescrito. Na Open-Meteo, a versão é o hash do conteúdo
+  canônico (sem `generationtime_ms`, que muda a cada chamada); o hash do arquivo bruto fica em
+  `acquisition_params.file_sha256`.
 - Mesmo hash já publicado → execução registrada como `skipped`. Hash novo ou `--force` →
   staging temporário e substituição da competência em `raw.tlc_yellow_trips` numa transação.
 - Cargas simultâneas da mesma fonte/competência são recusadas (advisory lock no PostgreSQL).

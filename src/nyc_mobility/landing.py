@@ -4,6 +4,7 @@ import hashlib
 import os
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,16 +16,23 @@ CHUNK_BYTES = 1 << 20
 @dataclass(frozen=True)
 class LandedFile:
     path: Path
-    sha256: str
+    sha256: str  # hash que identifica a versão (do arquivo ou do conteúdo canônico)
     size_bytes: int
     acquisition_params: dict
 
 
-def download(url: str, dest_dir: Path) -> LandedFile:
-    """Baixa `url` para `dest_dir/<sha256[:16]>/<nome>`.
+def download(
+    url: str,
+    dest_dir: Path,
+    name: str | None = None,
+    fingerprint: Callable[[Path], str] | None = None,
+) -> LandedFile:
+    """Baixa `url` para `dest_dir/<versão[:16]>/<nome>`.
 
     O conteúdo é gravado em um `.part` e só é promovido após o download completo; uma versão
-    já existente com o mesmo hash é reaproveitada, e versões diferentes coexistem.
+    já existente é reaproveitada, e versões diferentes coexistem. `fingerprint` calcula a versão
+    a partir do conteúdo canônico quando a resposta tem campos voláteis; o hash do arquivo bruto
+    fica registrado em `acquisition_params.file_sha256`.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=dest_dir, suffix=".part")
@@ -40,8 +48,12 @@ def download(url: str, dest_dir: Path) -> LandedFile:
                 size += len(chunk)
         if expected is not None and int(expected) != size:
             raise OSError(f"Download incompleto: {size} de {expected} bytes ({url})")
-        sha256 = digest.hexdigest()
-        final = dest_dir / sha256[:16] / url.rsplit("/", 1)[-1]
+        params = {"url": url, **headers}
+        version = digest.hexdigest()
+        if fingerprint:
+            params["file_sha256"] = version
+            version = fingerprint(Path(tmp))
+        final = dest_dir / version[:16] / (name or url.rsplit("/", 1)[-1])
         if final.exists():
             os.remove(tmp)
         else:
@@ -51,4 +63,4 @@ def download(url: str, dest_dir: Path) -> LandedFile:
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
-    return LandedFile(final, sha256, size, {"url": url, **headers})
+    return LandedFile(final, version, size, params)

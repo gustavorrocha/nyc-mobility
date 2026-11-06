@@ -2,7 +2,7 @@ import pyarrow as pa
 import pytest
 
 from nyc_mobility import landing, tlc_yellow
-from nyc_mobility.ingest import period_bounds
+from nyc_mobility.common import period_bounds
 
 
 def test_contract_accepts_2025_schema_and_reports_differences():

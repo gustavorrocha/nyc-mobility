@@ -3,9 +3,7 @@ import json
 import sys
 
 from nyc_mobility import __version__, db
-from nyc_mobility.ingest import ingest_yellow
-
-DATASETS = ("tlc.yellow",)
+from nyc_mobility.ingest import ADAPTERS, ingest
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,16 +16,22 @@ def main(argv: list[str] | None = None) -> int:
     db_actions.add_parser("upgrade", help="Aplica migrações Alembic")
     db_actions.add_parser("check", help="Verifica conexão e schemas")
 
-    ingest = commands.add_parser("ingest", help="Ingere uma competência de um dataset")
-    ingest.add_argument("--dataset", required=True, choices=DATASETS)
-    ingest.add_argument("--period", required=True, help="Competência AAAA-MM")
-    ingest.add_argument(
+    ingest_parser = commands.add_parser("ingest", help="Ingere um dataset")
+    ingest_parser.add_argument("--dataset", required=True, choices=sorted(ADAPTERS))
+    ingest_parser.add_argument(
+        "--period", help="Competência AAAA-MM (omitir para referências, ex.: tlc.taxi_zones)"
+    )
+    ingest_parser.add_argument(
         "--force", action="store_true", help="Recarrega mesmo se o hash já estiver publicado"
     )
     args = parser.parse_args(argv)
 
     if args.command == "ingest":
-        print(json.dumps(ingest_yellow(args.period, force=args.force), ensure_ascii=False))
+        if ADAPTERS[args.dataset].PERIODIC != (args.period is not None):
+            need = "exige" if ADAPTERS[args.dataset].PERIODIC else "não aceita"
+            parser.error(f"{args.dataset} {need} --period")
+        result = ingest(args.dataset, args.period, force=args.force)
+        print(json.dumps(result, ensure_ascii=False))
         return 0
 
     if args.action == "upgrade":

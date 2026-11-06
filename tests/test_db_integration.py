@@ -19,4 +19,6 @@ def test_upgrade_is_idempotent_and_creates_schemas(engine):
         "metadata.source_files",
         "metadata.ingestion_runs",
         "raw.tlc_yellow_trips",
+        "raw.tlc_taxi_zones",
+        "raw.openmeteo_weather_hourly",
     }

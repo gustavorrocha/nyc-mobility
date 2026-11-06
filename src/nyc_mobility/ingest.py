@@ -1,64 +1,67 @@
-"""Ingestão idempotente e transacional de uma competência (AAAA-MM) do TLC Yellow Taxi."""
+"""Fluxo comum de ingestão idempotente e transacional, delegando a carga a cada adaptador.
 
-import io
+Um adaptador é um módulo com SOURCE, DATASET, PERIODIC, `url(period)`, `load(...)` e,
+opcionalmente, `landing_name(period)` e `fingerprint(path)`. `load` valida o arquivo e substitui
+a versão publicada em raw sem fazer commit; o commit (dados + status da execução) é feito aqui.
+"""
+
 import json
-import re
-from datetime import datetime
 
-import pyarrow as pa
-import pyarrow.csv as pacsv
-import pyarrow.parquet as pq
 import sqlalchemy as sa
 
-from nyc_mobility import landing, tlc_yellow
+from nyc_mobility import landing, openmeteo, tlc_yellow, tlc_zones
+from nyc_mobility.common import period_bounds
 from nyc_mobility.config import database_url, landing_dir
 
-PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
-BATCH_ROWS = 100_000
+ADAPTERS = {f"{m.SOURCE}.{m.DATASET}": m for m in (tlc_yellow, tlc_zones, openmeteo)}
 
 
 class ConcurrentLoadError(RuntimeError):
     """Outra carga da mesma fonte/competência está em andamento."""
 
 
-def period_bounds(period: str) -> tuple[datetime, datetime]:
-    if not PERIOD_RE.match(period):
-        raise ValueError(f"Competência inválida (esperado AAAA-MM): {period!r}")
-    year, month = int(period[:4]), int(period[5:])
-    start = datetime(year, month, 1)
-    return start, datetime(year + month // 12, month % 12 + 1, 1)
-
-
-def ingest_yellow(period: str, *, force: bool = False, url: str | None = None) -> dict:
-    """Carrega a competência em raw.tlc_yellow_trips. `url` só é sobrescrita em testes."""
-    period_bounds(period)
+def ingest(
+    dataset: str, period: str | None = None, *, force: bool = False, url: str | None = None
+) -> dict:
+    """Ingere `dataset` (ex.: tlc.yellow) na competência `period`. `url` só muda em testes."""
+    adapter = ADAPTERS[dataset]
+    if adapter.PERIODIC:
+        period_bounds(period or "")
+    elif period is not None:
+        raise ValueError(f"{dataset} é uma referência sem competência; não informe period")
     root = landing_dir()
+    dest = root / adapter.SOURCE / adapter.DATASET / (period or "")
     landed = landing.download(
-        url or tlc_yellow.url(period), root / tlc_yellow.SOURCE / tlc_yellow.DATASET / period
+        url or adapter.url(period),
+        dest,
+        name=adapter.landing_name(period) if hasattr(adapter, "landing_name") else None,
+        fingerprint=getattr(adapter, "fingerprint", None),
     )
     engine = sa.create_engine(database_url(), poolclass=sa.pool.NullPool)
     raw = engine.raw_connection()
     try:
-        return _ingest(raw.driver_connection, period, landed, root, force)
+        return _ingest(raw.driver_connection, adapter, dataset, period, landed, root, force)
     finally:
         raw.close()  # encerra a sessão e libera o advisory lock
 
 
-def _ingest(pg, period, landed, root, force) -> dict:
+def _ingest(pg, adapter, dataset, period, landed, root, force) -> dict:
     cur = pg.cursor()
     cur.execute(
         """INSERT INTO metadata.sources (source, dataset) VALUES (%s, %s)
            ON CONFLICT (source, dataset) DO UPDATE SET source = EXCLUDED.source
            RETURNING source_id""",
-        (tlc_yellow.SOURCE, tlc_yellow.DATASET),
+        (adapter.SOURCE, adapter.DATASET),
     )
     source_id = cur.fetchone()[0]
     pg.commit()
 
-    # Lock de sessão por fonte/competência: protege também execuções fora do Airflow.
-    cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (source_id, int(period.replace("-", ""))))
+    # Lock de sessão por fonte/competência (0 = referência sem competência): protege também
+    # execuções disparadas fora do Airflow.
+    lock_key = int(period.replace("-", "")) if period else 0
+    cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (source_id, lock_key))
     if not cur.fetchone()[0]:
-        raise ConcurrentLoadError(f"Carga de tlc.yellow {period} já em andamento")
+        raise ConcurrentLoadError(f"Carga de {dataset} {period or ''} já em andamento")
 
     cur.execute(
         """INSERT INTO metadata.source_files
@@ -78,7 +81,7 @@ def _ingest(pg, period, landed, root, force) -> dict:
     source_file_id = cur.fetchone()[0]
     pg.commit()
     summary = {
-        "dataset": "tlc.yellow",
+        "dataset": dataset,
         "period": period,
         "source_file_id": source_file_id,
         "sha256": landed.sha256,
@@ -86,7 +89,7 @@ def _ingest(pg, period, landed, root, force) -> dict:
 
     cur.execute(
         """SELECT source_file_id FROM metadata.ingestion_runs
-           WHERE source_id = %s AND period = %s AND status = 'succeeded'
+           WHERE source_id = %s AND period IS NOT DISTINCT FROM %s AND status = 'succeeded'
            ORDER BY run_id DESC LIMIT 1""",
         (source_id, period),
     )
@@ -116,9 +119,23 @@ def _ingest(pg, period, landed, root, force) -> dict:
     run_id = cur.fetchone()[0]
     pg.commit()
     try:
-        stats = _load(pg, landed.path, period, source_file_id)
+        stats = adapter.load(pg, landed.path, period, source_file_id)
+        cur.execute(
+            """UPDATE metadata.ingestion_runs SET status = 'succeeded', finished_at = now(),
+                   rows_read = %s, rows_inserted = %s, rows_flagged = %s,
+                   details = details || %s::jsonb
+               WHERE run_id = %s""",
+            (
+                stats["rows_read"],
+                stats["rows_inserted"],
+                stats["rows_flagged"],
+                json.dumps(stats["details"]),
+                run_id,
+            ),
+        )
+        pg.commit()  # dados publicados e status da execução na mesma transação
     except Exception as exc:
-        pg.rollback()  # a competência publicada em raw permanece intacta
+        pg.rollback()  # a versão publicada em raw permanece intacta
         cur.execute(
             """UPDATE metadata.ingestion_runs SET status = 'failed', finished_at = now(),
                    error = %s WHERE run_id = %s""",
@@ -126,86 +143,4 @@ def _ingest(pg, period, landed, root, force) -> dict:
         )
         pg.commit()
         raise
-    cur.execute(
-        """UPDATE metadata.ingestion_runs SET status = 'succeeded', finished_at = now(),
-               rows_read = %s, rows_inserted = %s, rows_flagged = %s,
-               details = details || %s::jsonb
-           WHERE run_id = %s""",
-        (
-            stats["rows_read"],
-            stats["rows_inserted"],
-            stats["rows_flagged"],
-            json.dumps(stats["details"]),
-            run_id,
-        ),
-    )
-    pg.commit()
     return {**summary, "run_id": run_id, "status": "succeeded", **stats}
-
-
-def _load(pg, path, period, source_file_id) -> dict:
-    """Staging temporário + substituição da competência em raw, em uma única transação."""
-    parquet = pq.ParquetFile(path)
-    report = tlc_yellow.validate(parquet.schema_arrow)
-    src_cols = [src for src, _ in report.columns]
-    raw_cols = [dst for _, dst in report.columns] + ["row_number"]
-    col_list = ", ".join(raw_cols)
-    cur = pg.cursor()
-    cur.execute(
-        f"CREATE TEMP TABLE stage ON COMMIT DROP AS "
-        f"SELECT {col_list} FROM {tlc_yellow.RAW_TABLE} WITH NO DATA"
-    )
-    staged = 0
-    with cur.copy(f"COPY stage ({col_list}) FROM STDIN (FORMAT csv)") as copy:
-        for batch in parquet.iter_batches(batch_size=BATCH_ROWS, columns=src_cols):
-            table = pa.Table.from_batches([batch]).select(src_cols).rename_columns(raw_cols[:-1])
-            table = table.append_column(
-                "row_number", pa.array(range(staged + 1, staged + 1 + len(table)), pa.int64())
-            )
-            buf = io.BytesIO()
-            pacsv.write_csv(table, buf, pacsv.WriteOptions(include_header=False))
-            copy.write(buf.getvalue())
-            staged += len(table)
-
-    rows_read = parquet.metadata.num_rows
-    if staged != rows_read:
-        raise RuntimeError(f"Contagem divergente: {staged} em staging, {rows_read} no arquivo")
-
-    # Problemas por registro: contabilizados e preservados em raw, nunca descartados.
-    start, end = period_bounds(period)
-    rules = {
-        "missing_required_value": "tpep_pickup_datetime IS NULL OR tpep_dropoff_datetime IS NULL"
-        " OR trip_distance IS NULL OR pulocationid IS NULL OR dolocationid IS NULL",
-        "dropoff_before_pickup": "tpep_dropoff_datetime < tpep_pickup_datetime",
-        "negative_distance": "trip_distance < 0",
-        "pickup_outside_period": "NOT (tpep_pickup_datetime >= %(start)s"
-        " AND tpep_pickup_datetime < %(end)s)",
-    }
-    counts = ", ".join(f"count(*) FILTER (WHERE {cond})" for cond in rules.values())
-    any_flag = " OR ".join(f"({cond})" for cond in rules.values())
-    cur.execute(
-        f"SELECT {counts}, count(*) FILTER (WHERE {any_flag}) FROM stage",
-        {"start": start, "end": end},
-    )
-    *by_rule, rows_flagged = cur.fetchone()
-
-    cur.execute(f"DELETE FROM {tlc_yellow.RAW_TABLE} WHERE period = %s", (period,))
-    rows_replaced = cur.rowcount
-    cur.execute(
-        f"INSERT INTO {tlc_yellow.RAW_TABLE} (source_file_id, period, {col_list}) "
-        f"SELECT %s, %s, {col_list} FROM stage",
-        (source_file_id, period),
-    )
-    rows_inserted = cur.rowcount
-    pg.commit()
-    return {
-        "rows_read": rows_read,
-        "rows_inserted": rows_inserted,
-        "rows_flagged": rows_flagged,
-        "details": {
-            "flags": dict(zip(rules, by_rule, strict=True)),
-            "rows_replaced": rows_replaced,
-            "missing_optional_columns": report.missing_optional,
-            "unexpected_columns": report.unexpected,
-        },
-    }
