@@ -53,6 +53,23 @@ uv run --env-file .env nyc-mobility db upgrade
 uv run --env-file .env dbt debug --project-dir dbt --profiles-dir dbt
 ```
 
+## Ingestão
+
+```bash
+# No container (mesmo código usado pelo Airflow) ou no host com `uv run --env-file .env`
+docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.yellow --period 2025-01
+docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.yellow --period 2025-01 --force
+```
+
+- O arquivo original fica em `data/landing/tlc/yellow/AAAA-MM/<sha256[:16]>/`; versões
+  republicadas coexistem, nada é sobrescrito.
+- Mesmo hash já publicado → execução registrada como `skipped`. Hash novo ou `--force` →
+  staging temporário e substituição da competência em `raw.tlc_yellow_trips` numa transação.
+- Cargas simultâneas da mesma fonte/competência são recusadas (advisory lock no PostgreSQL).
+- Execuções, contagens, registros sinalizados por motivo e erros ficam em
+  `metadata.ingestion_runs`; arquivos e hashes em `metadata.source_files`.
+- Os testes de integração criam e recriam o banco descartável `nyc_mobility_test`.
+
 Parar o ambiente: `docker compose down` (preserva o volume `postgres-data`; **não** use `-v`
 a menos que queira apagar os bancos).
 

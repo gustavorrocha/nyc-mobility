@@ -1,6 +1,12 @@
 import os
+from pathlib import Path
 
 from sqlalchemy import URL
+
+
+def landing_dir() -> Path:
+    """Raiz da landing zone (bind mount `./data/landing` no Docker)."""
+    return Path(os.environ.get("NYC_MOBILITY_LANDING_DIR", "data/landing")).resolve()
 
 
 def database_url() -> URL:

@@ -19,6 +19,7 @@ x-airflow-common: &airflow-common
     # Conexão dos processos de tarefa (CLI nyc-mobility e dbt) ao banco nyc_mobility.
     POSTGRES_HOST: postgres
     POSTGRES_PORT: "5432"
+    NYC_MOBILITY_LANDING_DIR: /opt/airflow/data/landing
   volumes:
     - ./dags:/opt/airflow/dags
     - ./data/logs:/opt/airflow/logs
