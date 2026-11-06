@@ -1,0 +1,36 @@
+[project]
+name = "nyc-mobility"
+version = "0.1.0"
+description = "Pipeline local de dados de mobilidade de NYC (TLC + Open-Meteo)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.20",
+    "psycopg[binary]>=3.3",
+    "sqlalchemy>=2.1",
+]
+
+[project.scripts]
+nyc-mobility = "nyc_mobility.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.14"]
+# Instalado em virtualenv separado na imagem Docker (isolado do Airflow).
+dbt = ["dbt-core>=1.10", "dbt-postgres>=1.10"]
+
+[tool.uv]
+default-groups = ["dev", "dbt"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

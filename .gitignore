@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# nyc-mobility: dados persistentes locais (landing e logs) e artefatos do dbt
+data/**
+!data/**/
+!data/**/.gitkeep
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/

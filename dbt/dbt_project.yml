@@ -1,0 +1,7 @@
+name: nyc_mobility
+version: "0.1.0"
+config-version: 2
+profile: nyc_mobility
+
+model-paths: ["models"]
+# Modelos de core/analytics serão criados na Etapa 4.
