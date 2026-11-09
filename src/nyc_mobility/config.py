@@ -13,7 +13,10 @@ def database_url() -> URL:
     """URL do banco `nyc_mobility`, montada a partir das variáveis POSTGRES_*."""
     missing = [v for v in ("POSTGRES_USER", "POSTGRES_PASSWORD") if not os.environ.get(v)]
     if missing:
-        raise RuntimeError(f"Variáveis de ambiente ausentes: {', '.join(missing)}")
+        raise RuntimeError(
+            f"Variáveis de ambiente ausentes: {', '.join(missing)}. No host, carregue o .env: "
+            "uv run --env-file .env nyc-mobility ..."
+        )
     return URL.create(
         "postgresql+psycopg",
         username=os.environ["POSTGRES_USER"],

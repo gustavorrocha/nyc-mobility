@@ -1,64 +1,118 @@
 # nyc-mobility
 
-Pipeline local de dados de mobilidade de NYC (TLC + Open-Meteo). Arquitetura e plano de
-implementação: [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Pipeline local de dados de mobilidade de NYC: corridas de táxi da TLC e clima horário da
+Open-Meteo, ingeridos por uma CLI Python, transformados com dbt e orquestrados pelo Airflow,
+tudo sobre PostgreSQL em Docker Compose. Arquitetura e decisões: [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+```text
+TLC / Open-Meteo ─> landing (arquivo original, por hash) ─> raw ─> core ─> analytics
+                    └──────── CLI nyc-mobility ────────┘    └──── dbt ────┘
+                                  orquestrado pela DAG monthly_pipeline (Airflow)
+```
 
 ## Estrutura
 
 | Caminho | Conteúdo |
 |---|---|
-| `src/nyc_mobility/` | Pacote Python e CLI `nyc-mobility` |
+| `src/nyc_mobility/` | Pacote Python e CLI `nyc-mobility` (um adaptador por fonte) |
 | `src/nyc_mobility/migrations/` | Migrações Alembic (schemas `raw`, `core`, `analytics`, `metadata`) |
 | `dbt/` | Projeto dbt (`core` e `analytics`) |
-| `dags/` | DAGs do Airflow |
-| `docker/` | Imagem do Airflow (com virtualenvs isolados para o pacote e o dbt) e init do PostgreSQL |
+| `dags/` | DAG `monthly_pipeline` |
+| `docker/` | Imagem do Airflow (virtualenvs isolados para o pacote e o dbt) e init do PostgreSQL |
+| `tests/` | Pytest: unidade, integração com PostgreSQL e `dbt build` sobre fixtures |
 | `data/landing/`, `data/logs/` | Arquivos originais e logs do Airflow (bind mounts, fora do Git) |
 
-## Pré-requisitos
+## Demonstração rápida
 
-Docker com Compose v2, [uv](https://docs.astral.sh/uv/) e Python 3.12.
-
-## Subir o ambiente local
+Pré-requisitos: Docker com Compose v2. Para desenvolver no host: [uv](https://docs.astral.sh/uv/)
+e Python 3.12.
 
 ```bash
-cp .env.example .env        # edite as senhas/segredos
+# 1. Configuração local (edite as senhas/segredos; o .env não é versionado)
+cp .env.example .env
+
+# 2. PostgreSQL 17 + migrações + Airflow 3.4 (LocalExecutor)
 docker compose up -d --build --wait airflow-apiserver airflow-scheduler airflow-dag-processor
+
+# 3. Pipeline de janeiro/2025: zonas, corridas (~3,5 mi, ~60 MB) e clima; depois dbt build
+docker compose exec airflow-scheduler airflow dags trigger monthly_pipeline -c '{"period": "2025-01"}'
+
+# 4. Acompanhe em http://127.0.0.1:8080 → monthly_pipeline (sem login; só uso local)
+
+# 5. Consulte os resultados (ou conecte um cliente SQL em 127.0.0.1:5432)
+docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d nyc_mobility'
 ```
 
-O `up` sobe o PostgreSQL 17 (bancos `nyc_mobility` e `airflow_metadata`), aplica as migrações
-do Airflow (`airflow-init`) e do projeto (`migrate`) e inicia o Airflow 3.4 com `LocalExecutor`.
+Consultas de exemplo:
 
-- UI do Airflow: <http://127.0.0.1:8080> (sem login; somente para desenvolvimento local).
-- PostgreSQL: `127.0.0.1:5432` (porta configurável por `POSTGRES_HOST_PORT`).
+```sql
+-- Zonas com mais embarques no mês
+select z.borough, z.zone, sum(d.trip_count) as trips
+from analytics.trip_demand_hourly d
+join core.zones z on z.zone_id = d.pickup_zone_id
+where d.period = '2025-01'
+group by 1, 2 order by trips desc limit 5;
 
-## Comandos de validação
+-- Média de corridas por hora, com e sem neve
+select snowfall_cm > 0 as snowing, count(*) as hours, round(avg(trip_count)) as avg_trips_per_hour
+from analytics.trip_weather_hourly
+where snowfall_cm is not null
+group by 1;
+
+-- Qualidade: corridas preservadas em core, mas fora das métricas, por motivo
+select period, invalid_reason, count(*)
+from core.trips where not is_valid
+group by 1, 2 order by 1, 3 desc;
+```
+
+Parar: `docker compose down` (preserva o volume `postgres-data`; **não** use `-v` a menos que
+queira apagar os bancos).
+
+## Orquestração (Airflow)
+
+DAG `monthly_pipeline` (`dags/monthly_pipeline.py`), disparada manualmente com a competência
+(`period`, `AAAA-MM`) e, opcionalmente, `force`:
+
+```text
+tlc_taxi_zones ─┐
+tlc_yellow ─────┼─> dbt_build ─> summary
+openmeteo_era5 ─┘
+```
+
+- Ingestões em paralelo via CLI `nyc-mobility ingest` (processos próprios), com 3 retries e
+  backoff exponencial; o resumo JSON de cada uma vai para o XCom e é consolidado em `summary`.
+- `dbt_build` só roda se as três fontes concluírem (`succeeded` ou `skipped`); sem retry.
+  Para reexecutar só as transformações: *Clear* em `dbt_build` com *Downstream* marcado.
+- `force=true` recarrega Yellow e clima mesmo sem hash novo (zonas nunca são forçadas).
+- Uma execução ativa por vez; cargas concorrentes da mesma fonte/competência também são
+  barradas no PostgreSQL (advisory lock).
+- Linhas inseridas por modelo: log de `dbt_build` (`INSERT 0 N`).
+
+## Ingestão
 
 ```bash
-# Serviços e saúde
-docker compose ps -a
-curl http://127.0.0.1:8080/api/v2/version
-
-# Migrações (idempotentes) e verificação de schemas
-docker compose run --rm migrate
-docker compose exec airflow-scheduler nyc-mobility db check
-
-# dbt (virtualenv isolado do Airflow)
-docker compose exec airflow-scheduler dbt debug
-
-# Desenvolvimento no host
-uv sync
-uv run ruff check . && uv run ruff format --check .
-uv run --env-file .env pytest            # testes de integração são pulados sem PostgreSQL
-uv run --env-file .env nyc-mobility db upgrade
-uv run --env-file .env dbt debug --project-dir dbt --profiles-dir dbt
+# No container (mesmo código usado pelo Airflow) ou no host com `uv run --env-file .env`
+docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.yellow --period 2025-01
+docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.yellow --period 2025-01 --force
+docker compose exec airflow-scheduler nyc-mobility ingest --dataset openmeteo.era5 --period 2025-01
+docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.taxi_zones   # sem competência
 ```
 
-## CI
+| Dataset | Tabela raw | Observações |
+|---|---|---|
+| `tlc.yellow` | `raw.tlc_yellow_trips` | Timestamps locais de NY, sem fuso, como publicados |
+| `openmeteo.era5` | `raw.openmeteo_weather_hourly` | `time_unix` em UTC; mês local de NY (DST incluído); acumulados (`precipitation`, `rain`, `snowfall`) referem-se à hora anterior |
+| `tlc.taxi_zones` | `raw.tlc_taxi_zones` | Referência versionada: só recarrega quando o hash muda |
 
-`.github/workflows/ci.yml` roda em PRs e em pushes na `main`: Ruff, Pytest com PostgreSQL 17
-(service container; no CI os testes de integração falham em vez de serem pulados), `dbt build`
-sobre fixtures (dentro do Pytest), migrações + `db check` e build da imagem do Airflow (sem push
-nem deploy).
+- O arquivo original fica em `data/landing/<fonte>/<dataset>/[AAAA-MM/]<sha256[:16]>/`; versões
+  republicadas coexistem, nada é sobrescrito. Na Open-Meteo, a versão é o hash do conteúdo
+  canônico (sem `generationtime_ms`, que muda a cada chamada); o hash do arquivo bruto fica em
+  `acquisition_params.file_sha256`.
+- Mesmo hash já publicado → execução registrada como `skipped`. Hash novo ou `--force` →
+  staging temporário e substituição da competência em `raw` numa transação; falhas preservam a
+  versão anterior.
+- Execuções, contagens, registros sinalizados por motivo e erros ficam em
+  `metadata.ingestion_runs`; arquivos e hashes em `metadata.source_files`.
 
 ## Transformação (dbt)
 
@@ -84,45 +138,58 @@ uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
   competências cuja versão mudou: mês republicado → só ele; nova versão de zonas → todas as
   viagens; clima do mês seguinte → o viagens x clima do mês anterior.
 - `dbt build --full-refresh` reconstrói tudo (necessário após mudar a estrutura de um modelo).
-- Desvio registrado do `ARCHITECTURE.md` (item 5.3 previa tabelas reconstruídas no MVP):
-  incremental adotado por decisão do projeto. Os testes dbt ainda varrem as tabelas inteiras.
-- Testes garantem que `core.trips` concilia com `raw` por competência.
-- Limitação aceita: na volta do horário de verão, 01:00–01:59 local ocorre duas vezes e a TLC
-  não informa o fuso; a conversão para UTC escolhe sempre a mesma ocorrência.
+- Testes dbt: unicidade, não nulos, integridade referencial (corridas válidas), valores aceitos
+  e conciliação `core.trips` = `raw` por competência.
 
-## Ingestão
+## Desenvolvimento e testes
 
 ```bash
-# No container (mesmo código usado pelo Airflow) ou no host com `uv run --env-file .env`
-docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.yellow --period 2025-01
-docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.yellow --period 2025-01 --force
-docker compose exec airflow-scheduler nyc-mobility ingest --dataset openmeteo.era5 --period 2025-01
-docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.taxi_zones   # sem competência
+uv sync
+uv run ruff check . && uv run ruff format --check .
+uv run --env-file .env pytest -rs       # integração pulada sem PostgreSQL (exceto no CI)
+uv run --env-file .env nyc-mobility db upgrade
+uv run --env-file .env nyc-mobility db check
 ```
 
-| Dataset | Tabela raw | Observações |
-|---|---|---|
-| `tlc.yellow` | `raw.tlc_yellow_trips` | Timestamps locais de NY, sem fuso, como publicados |
-| `openmeteo.era5` | `raw.openmeteo_weather_hourly` | `time_unix` em UTC; mês local de NY (DST incluído); acumulados (`precipitation`, `rain`, `snowfall`) referem-se à hora anterior |
-| `tlc.taxi_zones` | `raw.tlc_taxi_zones` | Referência versionada: só recarrega quando o hash muda |
+- Os testes não acessam as APIs públicas: usam Parquet/JSON/CSV gerados em fixtures (`file://`).
+- Os testes de integração usam bancos descartáveis (`nyc_mobility_test`,
+  `nyc_mobility_test_migrations`), recriados a cada execução; o banco de desenvolvimento não é
+  tocado. Cobrem ingestão, idempotência, migrações (ida e volta) e `dbt build` incremental.
+- **CI** (`.github/workflows/ci.yml`, em PRs e pushes na `main`): Ruff; Pytest com PostgreSQL 17
+  (no CI, a ausência do banco falha em vez de pular); migrações + `db check`; build da imagem do
+  Airflow e verificação da estrutura da DAG dentro dela. Sem publicação de imagem nem deploy.
 
-- O arquivo original fica em `data/landing/<fonte>/<dataset>/[AAAA-MM/]<sha256[:16]>/`; versões
-  republicadas coexistem, nada é sobrescrito. Na Open-Meteo, a versão é o hash do conteúdo
-  canônico (sem `generationtime_ms`, que muda a cada chamada); o hash do arquivo bruto fica em
-  `acquisition_params.file_sha256`.
-- Mesmo hash já publicado → execução registrada como `skipped`. Hash novo ou `--force` →
-  staging temporário e substituição da competência em `raw.tlc_yellow_trips` numa transação.
-- Cargas simultâneas da mesma fonte/competência são recusadas (advisory lock no PostgreSQL).
-- Execuções, contagens, registros sinalizados por motivo e erros ficam em
-  `metadata.ingestion_runs`; arquivos e hashes em `metadata.source_files`.
-- Os testes de integração criam e recriam o banco descartável `nyc_mobility_test`.
+## Solução de problemas
 
-Parar o ambiente: `docker compose down` (preserva o volume `postgres-data`; **não** use `-v`
-a menos que queira apagar os bancos).
+- **`Variáveis de ambiente ausentes: POSTGRES_USER...`** no host: use `uv run --env-file .env ...`
+  (no container as variáveis já vêm do Compose).
+- **Conexão travando no Windows:** use `127.0.0.1` (padrão do projeto), não `localhost`; o
+  Docker Desktop pode aceitar `::1` sem responder.
+- **Mudou algo em `dbt/` ou `src/`:** reconstrua a imagem (`docker compose up -d --build ...`);
+  se mudou a estrutura de um modelo, rode `dbt build --full-refresh` uma vez.
+- **DAG nova não aparece:** aguarde o `dag-processor` ou force com
+  `docker compose exec airflow-dag-processor airflow dags reserialize`.
+- **Pasta sincronizada (ex.: OneDrive):** exclua `data/` e `.venv/` da sincronização; arquivos
+  "somente online" podem causar `Access is denied` no `uv sync`.
 
-## Observações
+## Limitações conhecidas
 
-- O repositório pode estar em uma pasta sincronizada (ex.: OneDrive). Recomenda-se excluir
-  `data/` da sincronização, pois a landing e os logs podem ficar grandes.
-- `/api/v2/monitor/health` reporta o `triggerer` como `down`: o serviço não é usado no MVP
-  (não há operadores deferrable).
+- **Horário de verão:** a TLC publica horário local sem fuso; na volta do horário de verão,
+  01:00–01:59 ocorre duas vezes e a conversão para UTC escolhe sempre a mesma ocorrência. O
+  `ARCHITECTURE.md` (4.7) pede tratamento explícito antes de processar esses dias (março e
+  novembro); validado apenas para jan–fev/2025.
+- Cada ingestão baixa o arquivo novamente para calcular o hash, mesmo que resulte em `skipped`.
+- Erros de contrato também passam pelos retries da DAG (download repetido, sem efeito colateral).
+- Recusas por concorrência (lock ocupado) não são registradas em `metadata.ingestion_runs`.
+- Clima de um único ponto (Central Park, grade ERA5) para toda a cidade.
+- Testes dbt varrem as tabelas inteiras a cada build, mesmo no incremental.
+- Sem política de retenção na landing: versões antigas se acumulam em `data/landing/`.
+- UI do Airflow sem login (`SIMPLE_AUTH_MANAGER_ALL_ADMINS`), só para uso local;
+  `/api/v2/monitor/health` reporta o `triggerer` como `down` (não usado no MVP).
+
+## Desvios do `ARCHITECTURE.md`
+
+- **Processamento incremental em dbt** (o item 4.5 previa tabelas reconstruídas no MVP):
+  adotado por decisão do projeto, por competência e guiado por `source_version`.
+- **Horário de verão** aceito como limitação documentada (ver acima), em vez do tratamento
+  explícito previsto no item 4.7.

@@ -53,3 +53,19 @@ jobs:
       - uses: actions/checkout@v7
       # Somente build: sem push de imagem nem deploy no MVP.
       - run: docker build -f docker/airflow/Dockerfile -t nyc-mobility-airflow:ci .
+      - name: DAGs importam sem erros e monthly_pipeline mantém sua estrutura
+        run: |
+          docker run --rm -v "$PWD/dags:/opt/airflow/dags:ro" nyc-mobility-airflow:ci python -c "
+          from airflow.dag_processing.dagbag import DagBag
+          b = DagBag('/opt/airflow/dags')
+          assert not b.import_errors, b.import_errors
+          d = b.dags['monthly_pipeline']
+          ingest = {'tlc_taxi_zones', 'tlc_yellow', 'openmeteo_era5'}
+          up = {t.task_id: t.upstream_task_ids for t in d.tasks}
+          assert set(up) == ingest | {'dbt_build', 'summary'}, up
+          assert all(not up[t] for t in ingest), up
+          assert up['dbt_build'] == ingest, up
+          assert 'dbt_build' in up['summary'], up
+          assert d.max_active_runs == 1 and d.schedule is None
+          print('monthly_pipeline OK')
+          "
