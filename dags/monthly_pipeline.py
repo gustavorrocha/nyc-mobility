@@ -64,7 +64,7 @@ with DAG(
     @task
     def summary(*results: dict) -> dict:
         """Resultado consolidado da execução (também em metadata.ingestion_runs)."""
-        keys = ("status", "run_id", "source_file_id", "rows_inserted", "rows_flagged")
+        keys = ("status", "reason", "run_id", "source_file_id", "rows_inserted", "rows_flagged")
         report = {r["dataset"]: {k: r.get(k) for k in keys} for r in results}
         logging.getLogger(__name__).info("Resumo: %s", json.dumps(report, ensure_ascii=False))
         return report

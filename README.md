@@ -108,6 +108,9 @@ docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.taxi_zon
   republicadas coexistem, nada é sobrescrito. Na Open-Meteo, a versão é o hash do conteúdo
   canônico (sem `generationtime_ms`, que muda a cada chamada); o hash do arquivo bruto fica em
   `acquisition_params.file_sha256`.
+- **Download condicional:** quando a versão publicada tem `ETag`/`Last-Modified` (CloudFront da
+  TLC), a requisição é condicional; se a origem responder 304, a execução é `skipped` sem baixar
+  o arquivo. A Open-Meteo não envia esses cabeçalhos e é sempre baixada (JSON pequeno).
 - Mesmo hash já publicado → execução registrada como `skipped`. Hash novo ou `--force` →
   staging temporário e substituição da competência em `raw` numa transação; falhas preservam a
   versão anterior.
@@ -186,7 +189,6 @@ uv run --env-file .env nyc-mobility db check
 - **Horário de verão:** corridas ambíguas em que as duas ocorrências são igualmente plausíveis
   (ambos os horários na hora repetida) são resolvidas por regra fixa (primeira ocorrência), sem
   como confirmar pela origem; ficam identificadas em `local_time_issue = 'ambiguous'`.
-- Cada ingestão baixa o arquivo novamente para calcular o hash, mesmo que resulte em `skipped`.
 - Erros de contrato também passam pelos retries da DAG (download repetido, sem efeito colateral).
 - Recusas por concorrência (lock ocupado) não são registradas em `metadata.ingestion_runs`.
 - Clima de um único ponto (Central Park, grade ERA5) para toda a cidade.
