@@ -1,6 +1,8 @@
 import pytest
 
+from nyc_mobility import cli
 from nyc_mobility.cli import main
+from nyc_mobility.common import ContractError
 from nyc_mobility.config import database_url
 
 
@@ -28,3 +30,12 @@ def test_cli_version(capsys):
         main(["--version"])
     assert exc.value.code == 0
     assert capsys.readouterr().out.strip() == "0.1.0"
+
+
+def test_cli_contract_error_has_dedicated_exit_code(monkeypatch, capsys):
+    def broken(*args, **kwargs):
+        raise ContractError("coluna obrigatória ausente: trip_distance")
+
+    monkeypatch.setattr(cli, "ingest", broken)
+    assert main(["ingest", "--dataset", "tlc.yellow", "--period", "2025-01"]) == 3
+    assert "Erro de contrato: coluna obrigatória ausente" in capsys.readouterr().err

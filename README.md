@@ -79,8 +79,11 @@ tlc_yellow ─────┼─> dbt_build ─> summary
 openmeteo_era5 ─┘
 ```
 
-- Ingestões em paralelo via CLI `nyc-mobility ingest` (processos próprios), com 3 retries e
-  backoff exponencial; o resumo JSON de cada uma vai para o XCom e é consolidado em `summary`.
+- Ingestões em paralelo via CLI `nyc-mobility ingest` (processos próprios, argumentos em lista,
+  sem shell), com 3 retries e backoff exponencial para falhas transitórias; o resumo JSON de
+  cada uma vai para o XCom e é consolidado em `summary`.
+- Erro de contrato (arquivo fora do esperado; CLI sai com código 3) falha a tarefa **sem
+  retry**, já que repetir baixaria o mesmo arquivo.
 - `dbt_build` só roda se as três fontes concluírem (`succeeded` ou `skipped`); sem retry.
   Para reexecutar só as transformações: *Clear* em `dbt_build` com *Downstream* marcado.
 - `force=true` recarrega Yellow e clima mesmo sem hash novo (zonas nunca são forçadas).
@@ -189,7 +192,6 @@ uv run --env-file .env nyc-mobility db check
 - **Horário de verão:** corridas ambíguas em que as duas ocorrências são igualmente plausíveis
   (ambos os horários na hora repetida) são resolvidas por regra fixa (primeira ocorrência), sem
   como confirmar pela origem; ficam identificadas em `local_time_issue = 'ambiguous'`.
-- Erros de contrato também passam pelos retries da DAG (download repetido, sem efeito colateral).
 - Recusas por concorrência (lock ocupado) não são registradas em `metadata.ingestion_runs`.
 - Clima de um único ponto (Central Park, grade ERA5) para toda a cidade.
 - Testes dbt varrem as tabelas inteiras a cada build, mesmo no incremental.

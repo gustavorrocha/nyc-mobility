@@ -3,7 +3,11 @@ import json
 import sys
 
 from nyc_mobility import __version__, db
+from nyc_mobility.common import ContractError
 from nyc_mobility.ingest import ADAPTERS, ingest
+
+# Código de saída para arquivo fora do contrato (2 já é usado pelo argparse para uso inválido).
+EXIT_CONTRACT_ERROR = 3
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,7 +34,12 @@ def main(argv: list[str] | None = None) -> int:
         if ADAPTERS[args.dataset].PERIODIC != (args.period is not None):
             need = "exige" if ADAPTERS[args.dataset].PERIODIC else "não aceita"
             parser.error(f"{args.dataset} {need} --period")
-        result = ingest(args.dataset, args.period, force=args.force)
+        try:
+            result = ingest(args.dataset, args.period, force=args.force)
+        except ContractError as exc:
+            # Falha estrutural do arquivo: repetir não adianta (o orquestrador não faz retry).
+            print(f"Erro de contrato: {exc}", file=sys.stderr)
+            return EXIT_CONTRACT_ERROR
         print(json.dumps(result, ensure_ascii=False))
         return 0
 
