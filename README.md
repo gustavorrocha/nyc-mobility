@@ -53,6 +53,12 @@ uv run --env-file .env nyc-mobility db upgrade
 uv run --env-file .env dbt debug --project-dir dbt --profiles-dir dbt
 ```
 
+## CI
+
+`.github/workflows/ci.yml` roda em PRs e em pushes na `main`: Ruff, Pytest com PostgreSQL 17
+(service container; no CI os testes de integração falham em vez de serem pulados), migrações +
+`db check`, `dbt parse` e build da imagem do Airflow (sem push nem deploy).
+
 ## Ingestão
 
 ```bash

@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 
 import pyarrow as pa
@@ -27,6 +28,8 @@ def engine():
             conn.execute(sa.text(f"DROP DATABASE IF EXISTS {TEST_DB} WITH (FORCE)"))
             conn.execute(sa.text(f"CREATE DATABASE {TEST_DB}"))
     except Exception as exc:  # noqa: BLE001
+        if os.environ.get("CI"):  # no CI o banco é obrigatório: falhar em vez de pular
+            raise
         pytest.skip(f"PostgreSQL indisponível: {exc}")
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("POSTGRES_DB", TEST_DB)
