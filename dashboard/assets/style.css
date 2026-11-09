@@ -78,3 +78,30 @@ body { margin: 0; }
 @media (max-width: 640px) {
   .topbar, .filters, .page { padding-left: 16px; padding-right: 16px; }
 }
+
+/* Página 1: KPIs e gráficos */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.kpi { padding: 16px 20px; }
+.kpi-label { color: var(--muted); font-size: 0.8rem; font-weight: 600; }
+.kpi-value { margin: 6px 0 2px; font-size: 1.6rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.kpi-note { color: var(--muted); font-size: 0.78rem; }
+
+.charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.chart.wide { grid-column: 1 / -1; }
+.chart h3 { margin: 0; font-size: 1rem; }
+.chart-note { margin: 2px 0 8px; color: var(--muted); font-size: 0.82rem; }
+
+@media (max-width: 960px) {
+  .charts { grid-template-columns: minmax(0, 1fr); }
+}

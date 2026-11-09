@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from test_weather_zones import weather_json, zones_csv
 
+from dashboard import mobility
 from nyc_mobility.ingest import ingest
 
 DBT_DIR = Path(__file__).parents[1] / "dbt"
@@ -92,6 +93,37 @@ def test_dbt_build_core_and_analytics(engine, landing, yellow_parquet, tmp_path,
         ("core.weather_hourly", False),
         ("core.zones", True),
     ]
+
+
+def test_dashboard_mobility_queries(engine, monkeypatch):
+    """Consultas da página Mobilidade sobre o analytics do teste anterior (fevereiro/2024)."""
+    monkeypatch.setenv("POSTGRES_DB", engine.url.database)
+    monkeypatch.setenv("DASHBOARD_DB_USER", engine.url.username)
+    monkeypatch.setenv("DASHBOARD_DB_PASSWORD", engine.url.password)
+    # 01/02/2024 (quinta): corridas válidas às 11h, 12h, 13h e 14h na zona 1 ("A", EWR).
+    p = mobility.params("2024-02-01", "2024-02-01", None, None, ["yellow"])
+    assert mobility.load_kpis(p) == {
+        "trips": 4,
+        "distance_mi": 1.5,
+        "duration_min": 15.0,
+        "amount_per_trip": 10.0,
+        "amount": 40.0,
+    }
+    trend = mobility.load_trend(p, "hour")
+    assert len(trend) == 24
+    assert [(r["t"].hour, r["trips"]) for r in trend if r["trips"]] == [
+        (11, 1),
+        (12, 1),
+        (13, 1),
+        (14, 1),
+    ]
+    heatmap = sorted((r["dow"], r["hour"], r["trips"]) for r in mobility.load_heatmap(p))
+    assert heatmap == [(4, 11, 1), (4, 12, 1), (4, 13, 1), (4, 14, 1)]
+    assert [(r["zone"], r["trips"], r["share"]) for r in mobility.load_ranking(p)] == [
+        ("A", 4, 1.0)
+    ]
+    for other in ({"borough": "Q"}, {"zones": [2]}, {"services": ["green"]}):
+        assert mobility.load_kpis({**p, **other})["trips"] is None
 
 
 def test_dbt_incremental_reprocesses_only_changed_periods(

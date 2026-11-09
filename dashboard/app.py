@@ -3,24 +3,32 @@
 import psycopg
 from dash import Dash, Input, Output, State, dcc, html
 
+from dashboard import mobility
 from dashboard.db import query
 
-# Rota -> (título, descrição, etapa do plano em que a página é implementada).
+
+def _planned(stage: int):
+    return lambda: [
+        html.Div(f"Conteúdo previsto para a etapa {stage}.", className="card placeholder")
+    ]
+
+
+# Rota -> (título, descrição, conteúdo da página).
 PAGES = {
     "/": (
         "Mobilidade urbana",
-        "Demanda, distâncias, durações, tarifas e zonas de embarque.",
-        2,
+        "Demanda, distâncias, durações, tarifas e zonas de embarque das corridas válidas.",
+        mobility.layout,
     ),
     "/clima": (
         "Mobilidade e clima",
         "Precipitação, temperatura e demanda por horário e dia da semana.",
-        4,
+        _planned(4),
     ),
     "/pipeline": (
         "Pipeline Health",
         "Execuções das ingestões, volumes, falhas e qualidade dos dados.",
-        5,
+        _planned(5),
     ),
 }
 
@@ -138,14 +146,9 @@ app.layout = layout  # função: filtros recarregados do banco a cada visita
 def route(pathname):
     nav = ["nav-link active" if path == pathname else "nav-link" for path in PAGES]
     if pathname not in PAGES:
-        return [html.H2("Página não encontrada"), dcc.Link("Voltar ao início", href="/")], nav
-    title, description, stage = PAGES[pathname]
-    content = [
-        html.H2(title),
-        html.P(description, className="lead"),
-        html.Div(f"Conteúdo previsto para a etapa {stage}.", className="card placeholder"),
-    ]
-    return content, nav
+        return [html.H2("Página não encontrada"), dcc.Link("Voltar ao início", href="/")], *nav
+    title, description, content = PAGES[pathname]
+    return [html.H2(title), html.P(description, className="lead"), *content()], *nav
 
 
 @app.callback(

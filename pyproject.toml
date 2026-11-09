@@ -37,4 +37,6 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Padrões do pytest + data/ (landing e logs do Airflow, com links do Linux ilegíveis no Windows).
+norecursedirs = [".*", "*.egg", "build", "dist", "node_modules", "venv", "data"]
 pythonpath = ["."]  # pacote dashboard/ na raiz do repositório

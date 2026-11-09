@@ -1,0 +1,74 @@
+"""Página Mobilidade urbana: filtros e visualizações (as consultas são testadas em
+test_transform.py, sobre o analytics produzido pelo dbt)."""
+
+from datetime import date, datetime
+
+from dashboard import mobility
+
+
+def test_params_make_end_exclusive_and_empty_zones_mean_all():
+    p = mobility.params("2025-01-01", "2025-01-31T00:00:00", None, [], ["yellow"])
+    assert p == {
+        "start": date(2025, 1, 1),
+        "end": date(2025, 2, 1),
+        "borough": None,
+        "zones": None,
+        "services": ["yellow"],
+    }
+    assert len(mobility.days_in(p)) == 31
+
+
+def test_kpi_tiles_format_pt_br_and_handle_no_data():
+    k = {
+        "trips": 7052499,
+        "distance_mi": 5.9415,
+        "duration_min": 15.22,
+        "amount_per_trip": 25.3167,
+        "amount": 178545872.95,
+    }
+    values = [tile.children[1].children for tile in mobility.kpi_tiles(k, 59)]
+    assert values == ["7.052.499", "5,94 mi", "15,2 min", "US$ 25,32", "US$ 178.545.873"]
+    assert mobility.kpi_tiles(k, 59)[0].children[2].children == "119.534 por dia"
+    empty = dict.fromkeys(k)
+    assert {t.children[1].children for t in mobility.kpi_tiles(empty, 59)} == {
+        "—",
+        "— mi",
+        "— min",
+    }
+
+
+def test_heatmap_averages_by_weekday_occurrences():
+    # 01/01/2025 (quarta) a 14/01/2025: duas quartas, nenhuma ausente.
+    days = [date(2025, 1, d) for d in range(1, 15)]
+    fig = mobility.heatmap_figure([{"dow": 3, "hour": 8, "trips": 100}], days)
+    z = fig.data[0].z
+    assert z[2][8] == 50  # 100 corridas / 2 quartas
+    assert z[2][9] == 0  # hora sem corridas
+    # Um único dia: os demais dias da semana ficam vazios, não zero.
+    z = mobility.heatmap_figure([{"dow": 3, "hour": 8, "trips": 100}], days[:1]).data[0].z
+    assert z[2][8] == 100 and z[0][8] is None
+
+
+def test_ranking_keeps_homonymous_zones_apart():
+    rows = [
+        {"zone_id": 56, "zone": "Corona", "borough": "Queens", "trips": 20, "share": 0.5},
+        {"zone_id": 57, "zone": "Corona", "borough": "Queens", "trips": 10, "share": 0.25},
+    ]
+    bar = mobility.ranking_figure(rows).data[0]
+    assert list(bar.y) == [0, 1] and list(bar.x) == [20, 10]
+    assert list(bar.text) == ["20 · 50,0%", "10 · 25,0%"]
+
+
+def test_empty_results_render_message():
+    for fig in (
+        mobility.trend_figure([{"t": datetime(2025, 1, 1), "trips": 0}], "day"),
+        mobility.heatmap_figure([], [date(2025, 1, 1)]),
+        mobility.ranking_figure([]),
+    ):
+        assert fig.layout.annotations[0].text.startswith("Sem dados")
+
+
+def test_update_without_period_returns_empty_page():
+    kpis, *figures = mobility.update(None, None, None, None, ["yellow"])
+    assert len(figures) == 3  # um valor por Output (o Dash não aceita listas aninhadas)
+    assert kpis == [] and all(f.layout.annotations for f in figures)
