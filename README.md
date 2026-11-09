@@ -56,8 +56,39 @@ uv run --env-file .env dbt debug --project-dir dbt --profiles-dir dbt
 ## CI
 
 `.github/workflows/ci.yml` roda em PRs e em pushes na `main`: Ruff, Pytest com PostgreSQL 17
-(service container; no CI os testes de integração falham em vez de serem pulados), migrações +
-`db check`, `dbt parse` e build da imagem do Airflow (sem push nem deploy).
+(service container; no CI os testes de integração falham em vez de serem pulados), `dbt build`
+sobre fixtures (dentro do Pytest), migrações + `db check` e build da imagem do Airflow (sem push
+nem deploy).
+
+## Transformação (dbt)
+
+```bash
+docker compose exec airflow-scheduler dbt build        # ou, no host:
+uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
+```
+
+| Modelo | Grão | Observações |
+|---|---|---|
+| `core.zones` | zona | Cadastro TLC; strings vazias viram `NULL` |
+| `core.service_types` | modalidade | Seed; no MVP, apenas `yellow` |
+| `core.trips` | corrida | Uma linha por registro de `raw` (nada é excluído); `is_valid` e `invalid_reason` (`missing_required_value`, `dropoff_before_pickup`, `negative_distance`, `pickup_outside_period`, `unknown_zone`); horários locais originais e em UTC |
+| `core.weather_hourly` | hora UTC | Semântica da fonte: acumulados referem-se à hora anterior a `observed_at_utc` |
+| `analytics.trip_demand_hourly` | hora × modalidade × zona de embarque | Apenas corridas válidas |
+| `analytics.trip_weather_hourly` | hora `[hour_utc, +1h)` | Viagens válidas e clima da hora, inclusive horas sem corrida; instantâneas no início da hora, acumulados da observação seguinte (`NULL` na última hora sem a competência seguinte) |
+
+- **Incremental por competência** nos modelos transacionais (`core.trips`,
+  `core.weather_hourly`, `analytics.*`); cadastros (`zones`, `service_types`) são reconstruídos
+  inteiros. Cada linha guarda em `source_version` a versão dos insumos da sua competência
+  (arquivo publicado em `metadata.ingestion_runs`, cadastro de zonas e, no viagens x clima, o
+  clima do mês seguinte). Um `dbt build` reprocessa (delete+insert por `period`) só as
+  competências cuja versão mudou: mês republicado → só ele; nova versão de zonas → todas as
+  viagens; clima do mês seguinte → o viagens x clima do mês anterior.
+- `dbt build --full-refresh` reconstrói tudo (necessário após mudar a estrutura de um modelo).
+- Desvio registrado do `ARCHITECTURE.md` (item 5.3 previa tabelas reconstruídas no MVP):
+  incremental adotado por decisão do projeto. Os testes dbt ainda varrem as tabelas inteiras.
+- Testes garantem que `core.trips` concilia com `raw` por competência.
+- Limitação aceita: na volta do horário de verão, 01:00–01:59 local ocorre duas vezes e a TLC
+  não informa o fuso; a conversão para UTC escolhe sempre a mesma ocorrência.
 
 ## Ingestão
 

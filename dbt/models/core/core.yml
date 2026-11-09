@@ -1,0 +1,62 @@
+version: 2
+
+seeds:
+  - name: service_types
+    description: Modalidades de viagem; no MVP, apenas yellow.
+    columns:
+      - name: service_type
+        data_tests: [unique, not_null]
+
+models:
+  - name: zones
+    description: Cadastro TLC Taxi Zones (versão publicada).
+    columns:
+      - name: zone_id
+        data_tests: [unique, not_null]
+
+  - name: trips
+    description: >
+      Corridas de todas as modalidades, uma linha por registro de raw. Inválidas são mantidas com
+      is_valid = false e o motivo em invalid_reason.
+    columns:
+      - name: service_type
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('service_types'), field: service_type}
+      - name: source_file_id
+        data_tests: [not_null]
+      - name: source_row_number
+        data_tests: [not_null]
+      - name: is_valid
+        data_tests: [not_null]
+      - name: invalid_reason
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - missing_required_value
+                  - dropoff_before_pickup
+                  - negative_distance
+                  - pickup_outside_period
+                  - unknown_zone
+      - name: pickup_zone_id
+        data_tests:
+          - relationships:
+              arguments: {to: ref('zones'), field: zone_id}
+              config: {where: is_valid}
+      - name: dropoff_zone_id
+        data_tests:
+          - relationships:
+              arguments: {to: ref('zones'), field: zone_id}
+              config: {where: is_valid}
+      - name: duration_seconds
+        data_tests:
+          - not_null:
+              config: {where: is_valid}
+
+  - name: weather_hourly
+    description: Clima horário (Open-Meteo ERA5, ponto único em Manhattan).
+    columns:
+      - name: observed_at_utc
+        data_tests: [unique, not_null]

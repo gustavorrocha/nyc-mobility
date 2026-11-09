@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Versão publicada de cada fonte/competência, carregada pela CLI de ingestão.
+    tables:
+      - name: tlc_yellow_trips
+      - name: tlc_taxi_zones
+      - name: openmeteo_weather_hourly
+
+  - name: metadata
+    description: >
+      Controle da ingestão. A última execução `succeeded` de cada fonte/competência aponta para o
+      arquivo publicado em raw (a carga e o registro do sucesso ocorrem na mesma transação).
+    tables:
+      - name: sources
+      - name: ingestion_runs

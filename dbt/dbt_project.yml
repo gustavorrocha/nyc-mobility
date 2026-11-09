@@ -4,4 +4,19 @@ config-version: 2
 profile: nyc_mobility
 
 model-paths: ["models"]
-# Modelos de core/analytics serão criados na Etapa 4.
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+# MVP: tabelas reconstruídas a cada `dbt build`, sem lógica incremental.
+models:
+  nyc_mobility:
+    +materialized: table
+    core:
+      +schema: core
+    analytics:
+      +schema: analytics
+
+seeds:
+  nyc_mobility:
+    +schema: core
