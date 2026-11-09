@@ -36,13 +36,14 @@ def test_layout_loads_filters_from_database(monkeypatch):
 
 @pytest.mark.parametrize("path", list(dash_app.PAGES))
 def test_route_renders_each_page_and_marks_nav(path):
-    content, *nav = dash_app.route(path)
+    content, *nav, filters_hidden = dash_app.route(path)
     assert content[0].children == dash_app.PAGES[path][0]
+    assert filters_hidden == (path == "/pipeline")  # metadados não usam os filtros globais
     assert nav == ["nav-link active" if p == path else "nav-link" for p in dash_app.PAGES]
 
 
 def test_route_unknown_path():
-    content, *nav = dash_app.route("/nao-existe")
+    content, *nav, _ = dash_app.route("/nao-existe")
     assert content[0].children == "Página não encontrada"
     assert "nav-link active" not in nav
 

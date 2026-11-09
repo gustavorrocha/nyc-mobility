@@ -52,6 +52,9 @@ body { margin: 0; }
   border-bottom: 1px solid var(--line);
 }
 
+/* `hidden` (página Pipeline Health): o display: grid acima anularia o atributo. */
+.filters[hidden] { display: none; }
+
 .field-label {
   display: block;
   margin-bottom: 6px;
@@ -110,3 +113,14 @@ body { margin: 0; }
 .effect-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px; }
 .effect-label { color: var(--muted); font-size: 0.85rem; }
 .effect-value { font-size: 1.35rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+/* Página 3: tabelas e cores de status (sempre acompanhadas de ícone e rótulo) */
+.table-wrap { overflow-x: auto; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.data-table th { color: var(--muted); font-weight: 600; text-align: right; padding: 8px 10px; border-bottom: 2px solid var(--line); white-space: nowrap; }
+.data-table td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.data-table .left { text-align: left; }
+.tone-good { color: #0a850a; font-weight: 600; }
+.tone-critical { color: #d03b3b; font-weight: 600; }
+.tone-warning { color: #946300; font-weight: 600; }
+.tone-muted { color: var(--muted); }

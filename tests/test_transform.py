@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from test_weather_zones import weather_json, zones_csv
 
-from dashboard import climate, mobility
+from dashboard import climate, mobility, pipeline
 from nyc_mobility.ingest import ingest
 
 DBT_DIR = Path(__file__).parents[1] / "dbt"
@@ -143,6 +143,30 @@ def test_dashboard_mobility_queries(engine, monkeypatch):
     hours = climate.load_hours(month)
     assert len(hours) == 696 and sum(h["trips"] for h in hours) == 4
     assert sum(h["trips"] for h in climate.load_hours({**month, "borough": "Q"})) == 0
+
+
+def test_dashboard_pipeline_queries(engine, monkeypatch):
+    """Pipeline Health sobre o banco do teste: metadata das ingestões + analytics do dbt."""
+    monkeypatch.setenv("POSTGRES_DB", engine.url.database)
+    monkeypatch.setenv("DASHBOARD_DB_USER", engine.url.username)
+    monkeypatch.setenv("DASHBOARD_DB_PASSWORD", engine.url.password)
+    runs = pipeline.load_runs()
+    assert {"tlc.yellow", "tlc.taxi_zones", "openmeteo.era5"} <= {r["dataset"] for r in runs}
+    recon = {
+        r["period"]: r
+        for r in pipeline.reconciliation(runs, pipeline.load_quality(), pipeline.load_consumption())
+    }
+    # 2024-02: 5 linhas, 1 inválida; 2024-03: todas inválidas (nada chega ao analytics).
+    feb, mar = recon["2024-02"], recon["2024-03"]
+    assert (feb["raw"], feb["core"], feb["invalid"], feb["valid"], feb["ok"]) == (5, 5, 1, 4, True)
+    assert (feb["weather_hours"], feb["expected_hours"]) == (696, 696)
+    assert (mar["raw"], mar["core"], mar["invalid"], mar["valid"], mar["ok"]) == (
+        5,
+        5,
+        5,
+        None,
+        True,
+    )
 
 
 def test_dbt_incremental_reprocesses_only_changed_periods(

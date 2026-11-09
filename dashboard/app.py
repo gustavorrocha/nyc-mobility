@@ -3,15 +3,8 @@
 import psycopg
 from dash import Dash, Input, Output, State, dcc, html
 
-from dashboard import climate, mobility
+from dashboard import climate, mobility, pipeline
 from dashboard.db import query
-
-
-def _planned(stage: int):
-    return lambda: [
-        html.Div(f"Conteúdo previsto para a etapa {stage}.", className="card placeholder")
-    ]
-
 
 # Rota -> (título, descrição, conteúdo da página).
 PAGES = {
@@ -28,10 +21,11 @@ PAGES = {
     ),
     "/pipeline": (
         "Pipeline Health",
-        "Execuções das ingestões, volumes, falhas e qualidade dos dados.",
-        _planned(5),
+        "Execuções das ingestões, volumes, conciliação e qualidade dos dados.",
+        pipeline.layout,
     ),
 }
+NO_FILTERS = {"/pipeline"}  # filtros globais são de mobilidade, não de metadados
 
 # suppress_callback_exceptions: o conteúdo das páginas é montado por rota, fora do layout inicial
 # (e o Dash não chama a função de layout, que consulta o banco, já na importação).
@@ -95,6 +89,7 @@ def layout() -> html.Div:
                 ],
             ),
             html.Section(
+                id="filters",
                 className="filters",
                 children=[
                     _field(
@@ -142,14 +137,17 @@ app.layout = layout  # função: filtros recarregados do banco a cada visita
 @app.callback(
     Output("page", "children"),
     [Output(f"nav-{i}", "className") for i in range(len(PAGES))],
+    Output("filters", "hidden"),
     Input("url", "pathname"),
 )
 def route(pathname):
     nav = ["nav-link active" if path == pathname else "nav-link" for path in PAGES]
+    hidden = pathname in NO_FILTERS
     if pathname not in PAGES:
-        return [html.H2("Página não encontrada"), dcc.Link("Voltar ao início", href="/")], *nav
+        not_found = [html.H2("Página não encontrada"), dcc.Link("Voltar ao início", href="/")]
+        return not_found, *nav, hidden
     title, description, content = PAGES[pathname]
-    return [html.H2(title), html.P(description, className="lead"), *content()], *nav
+    return [html.H2(title), html.P(description, className="lead"), *content()], *nav, hidden
 
 
 @app.callback(
