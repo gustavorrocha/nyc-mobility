@@ -18,9 +18,11 @@ nyc-mobility = "nyc_mobility.cli:main"
 dev = ["pytest>=8", "ruff>=0.14"]
 # Instalado em virtualenv separado na imagem Docker (isolado do Airflow).
 dbt = ["dbt-core>=1.10", "dbt-postgres>=1.10"]
+# Dashboard (imagem própria, sem o pacote do pipeline): Dash + Plotly e o driver do PostgreSQL.
+dashboard = ["dash>=3", "psycopg[binary]>=3.3"]
 
 [tool.uv]
-default-groups = ["dev", "dbt"]
+default-groups = ["dev", "dbt", "dashboard"]
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
@@ -35,3 +37,6 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Padrões do pytest + data/ (landing e logs do Airflow, com links do Linux ilegíveis no Windows).
+norecursedirs = [".*", "*.egg", "build", "dist", "node_modules", "venv", "data"]
+pythonpath = ["."]  # pacote dashboard/ na raiz do repositório

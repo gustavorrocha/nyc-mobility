@@ -16,8 +16,10 @@ demand as (
     select
         hour_utc,
         sum(trip_count) as trip_count,
-        sum(avg_duration_min * trip_count) / sum(trip_count) as avg_duration_min,
-        sum(avg_distance_miles * trip_count) / sum(trip_count) as avg_distance_miles
+        sum(measured_trip_count) as measured_trip_count,
+        sum(duration_min_sum) as duration_min_sum,
+        sum(distance_miles_sum) as distance_miles_sum,
+        sum(amount_sum) as amount_sum
     from {{ ref('trip_demand_hourly') }}
     where period in (select period from periods)
     group by 1
@@ -28,8 +30,11 @@ select
     w.observed_at_utc at time zone 'America/New_York' as hour_local,
     w.period,
     coalesce(d.trip_count, 0) as trip_count,
-    d.avg_duration_min,
-    d.avg_distance_miles,
+    -- Médias só das corridas com métricas plausíveis (NULL sem corridas medidas na hora).
+    d.duration_min_sum / nullif(d.measured_trip_count, 0) as avg_duration_min,
+    d.distance_miles_sum / nullif(d.measured_trip_count, 0) as avg_distance_miles,
+    d.distance_miles_sum / nullif(d.duration_min_sum / 60, 0) as avg_speed_mph,
+    d.amount_sum / nullif(d.measured_trip_count, 0) as avg_amount,
     w.temperature_c,
     w.relative_humidity_pct,
     w.wind_speed_kmh,

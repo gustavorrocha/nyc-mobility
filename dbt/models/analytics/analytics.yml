@@ -2,11 +2,16 @@ version: 2
 
 models:
   - name: trip_demand_hourly
-    description: Corridas válidas por hora de embarque (UTC), modalidade e zona de embarque.
+    description: >
+      Corridas válidas por hora de embarque (UTC), modalidade e zona de embarque. Métricas em
+      somas e contagem das corridas sem metric_issue (médias = soma / measured_trip_count).
     columns:
       - name: hour_utc
         data_tests: [not_null]
       - name: trip_count
+        data_tests: [not_null]
+      - name: measured_trip_count
+        description: Corridas da linha com métricas plausíveis (base das médias).
         data_tests: [not_null]
 
   - name: trip_weather_hourly
@@ -14,5 +19,21 @@ models:
     columns:
       - name: hour_utc
         data_tests: [unique, not_null]
+      - name: trip_count
+        data_tests: [not_null]
+
+  - name: trip_quality
+    description: >
+      Corridas por competência, modalidade e situação de qualidade (ok, metric_issue ou
+      invalid), com o motivo. Soma por competência = linhas de raw (ver
+      tests/trips_reconcile_with_raw.sql).
+    columns:
+      - name: period
+        data_tests: [not_null]
+      - name: status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments: {values: [ok, metric_issue, invalid]}
       - name: trip_count
         data_tests: [not_null]

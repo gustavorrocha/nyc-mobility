@@ -106,5 +106,25 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  # NYC Mobility Explorer: só recebe as credenciais do usuário somente leitura (não usa o .env).
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/dashboard/Dockerfile
+    image: nyc-mobility-dashboard:local
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-nyc_mobility}
+      DASHBOARD_DB_PASSWORD: ${DASHBOARD_DB_PASSWORD}
+    ports:
+      - "127.0.0.1:${DASHBOARD_HOST_PORT:-8050}:8050"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:  # cria o usuário dashboard_reader e aplica sua senha
+        condition: service_completed_successfully
+
 volumes:
   postgres-data:

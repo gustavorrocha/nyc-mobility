@@ -139,10 +139,33 @@ trips as (
     from converted as y
     left join zones as pu on pu.zone_id = y.pulocationid
     left join zones as dz on dz.zone_id = y.dolocationid
+),
+
+measured as (
+    select
+        *,
+        extract(epoch from dropoff_at_utc - pickup_at_utc)::bigint as duration_seconds,
+        invalid_reason is null as is_valid
+    from trips
 )
 
+-- Métricas implausíveis da origem (primeiro motivo): a corrida segue válida e conta na demanda,
+-- mas fica fora das médias de duração, distância, velocidade e valor. Limites: vars metric_* em
+-- dbt_project.yml. Nas inválidas fica NULL (já estão fora de tudo).
 select
     *,
-    extract(epoch from dropoff_at_utc - pickup_at_utc)::bigint as duration_seconds,
-    invalid_reason is null as is_valid
-from trips
+    case
+        when not is_valid then null
+        when duration_seconds < {{ var('metric_min_duration_minutes') }} * 60
+            or duration_seconds > {{ var('metric_max_duration_minutes') }} * 60
+            then 'implausible_duration'
+        when trip_distance_miles <= 0
+            or trip_distance_miles > {{ var('metric_max_distance_miles') }}
+            then 'implausible_distance'
+        when trip_distance_miles / (duration_seconds / 3600.0) > {{ var('metric_max_speed_mph') }}
+            then 'implausible_speed'
+        when total_amount is null or total_amount <= 0
+            or total_amount > {{ var('metric_max_total_amount') }}
+            then 'implausible_amount'
+    end as metric_issue
+from measured

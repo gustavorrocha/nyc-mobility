@@ -1,6 +1,9 @@
+import os
+
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from psycopg import sql
 
 from nyc_mobility.config import database_url
 
@@ -16,6 +19,18 @@ def _config() -> Config:
 def upgrade() -> None:
     """Aplica as migrações Alembic até a revisão mais recente (idempotente)."""
     command.upgrade(_config(), "head")
+    _sync_dashboard_password()
+
+
+def _sync_dashboard_password() -> None:
+    """Aplica DASHBOARD_DB_PASSWORD ao usuário somente leitura do dashboard, se definida."""
+    password = os.environ.get("DASHBOARD_DB_PASSWORD")
+    if not password:
+        return
+    engine = sa.create_engine(database_url(), poolclass=sa.pool.NullPool)
+    with engine.begin() as conn:
+        statement = sql.SQL("ALTER ROLE dashboard_reader PASSWORD {}").format(sql.Literal(password))
+        conn.connection.driver_connection.execute(statement)
 
 
 def downgrade(revision: str) -> None:

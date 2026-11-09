@@ -64,6 +64,18 @@ models:
         data_tests:
           - not_null:
               config: {where: is_valid}
+      - name: metric_issue
+        description: >
+          Corrida válida com métrica implausível (primeiro motivo, limites nas vars metric_* do
+          dbt_project.yml): conta na demanda, mas fica fora das médias. NULL nas inválidas.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - implausible_duration
+                  - implausible_distance
+                  - implausible_speed
+                  - implausible_amount
 
   - name: weather_hourly
     description: Clima horário (Open-Meteo ERA5, ponto único em Manhattan).
