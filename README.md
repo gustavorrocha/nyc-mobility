@@ -40,6 +40,7 @@ docker compose exec airflow-scheduler airflow dags trigger monthly_pipeline -c '
 # 4. Acompanhe em http://127.0.0.1:8080 → monthly_pipeline (sem login; só uso local)
 
 # 5. Consulte os resultados (ou conecte um cliente SQL em 127.0.0.1:5432)
+#    Portas configuráveis no .env: AIRFLOW_HOST_PORT e POSTGRES_HOST_PORT
 docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d nyc_mobility'
 ```
 
@@ -79,13 +80,18 @@ tlc_yellow ─────┼─> dbt_build ─> summary
 openmeteo_era5 ─┘
 ```
 
-- Ingestões em paralelo via CLI `nyc-mobility ingest` (processos próprios), com 3 retries e
-  backoff exponencial; o resumo JSON de cada uma vai para o XCom e é consolidado em `summary`.
+- Ingestões em paralelo via CLI `nyc-mobility ingest` (processos próprios, argumentos em lista,
+  sem shell), com 3 retries e backoff exponencial para falhas transitórias; o resumo JSON de
+  cada uma vai para o XCom e é consolidado em `summary`.
+- Erro de contrato (arquivo fora do esperado; CLI sai com código 3) falha a tarefa **sem
+  retry**, já que repetir baixaria o mesmo arquivo.
 - `dbt_build` só roda se as três fontes concluírem (`succeeded` ou `skipped`); sem retry.
   Para reexecutar só as transformações: *Clear* em `dbt_build` com *Downstream* marcado.
 - `force=true` recarrega Yellow e clima mesmo sem hash novo (zonas nunca são forçadas).
 - Uma execução ativa por vez; cargas concorrentes da mesma fonte/competência também são
-  barradas no PostgreSQL (advisory lock).
+  barradas no PostgreSQL (advisory lock), inclusive fora do Airflow. A recusa fica registrada em
+  `metadata.ingestion_runs` como `failed` (motivo `carga concorrente`, sem arquivo associado) e
+  a tarefa tenta de novo pelos retries.
 - Linhas inseridas por modelo: log de `dbt_build` (`INSERT 0 N`).
 
 ## Ingestão
@@ -108,9 +114,15 @@ docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.taxi_zon
   republicadas coexistem, nada é sobrescrito. Na Open-Meteo, a versão é o hash do conteúdo
   canônico (sem `generationtime_ms`, que muda a cada chamada); o hash do arquivo bruto fica em
   `acquisition_params.file_sha256`.
+- **Download condicional:** quando a versão publicada tem `ETag`/`Last-Modified` (CloudFront da
+  TLC), a requisição é condicional; se a origem responder 304, a execução é `skipped` sem baixar
+  o arquivo. A Open-Meteo não envia esses cabeçalhos e é sempre baixada (JSON pequeno).
 - Mesmo hash já publicado → execução registrada como `skipped`. Hash novo ou `--force` →
-  staging temporário e substituição da competência em `raw` numa transação; falhas preservam a
-  versão anterior.
+  validação e substituição da competência (ou do cadastro inteiro, nas zonas) em `raw` numa
+  transação, com staging temporário no Yellow; falhas preservam a versão anterior.
+- Códigos de saída da CLI: `0` sucesso (inclusive `skipped`), `3` erro de contrato (arquivo
+  fora do esperado; não adianta repetir), `2` uso inválido, `1` demais erros (rede, carga
+  concorrente etc.).
 - Execuções, contagens, registros sinalizados por motivo e erros ficam em
   `metadata.ingestion_runs`; arquivos e hashes em `metadata.source_files`.
 
@@ -125,7 +137,7 @@ uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
 |---|---|---|
 | `core.zones` | zona | Cadastro TLC; strings vazias viram `NULL` |
 | `core.service_types` | modalidade | Seed; no MVP, apenas `yellow` |
-| `core.trips` | corrida | Uma linha por registro de `raw` (nada é excluído); `is_valid` e `invalid_reason` (`missing_required_value`, `dropoff_before_pickup`, `negative_distance`, `pickup_outside_period`, `unknown_zone`); horários locais originais e em UTC |
+| `core.trips` | corrida | Uma linha por registro de `raw` (nada é excluído); `is_valid` e `invalid_reason` (`missing_required_value`, `nonexistent_local_time`, `dropoff_before_pickup`, `negative_distance`, `pickup_outside_period`, `unknown_zone`); horários locais originais e em UTC; `local_time_issue` nas mudanças de horário de verão |
 | `core.weather_hourly` | hora UTC | Semântica da fonte: acumulados referem-se à hora anterior a `observed_at_utc` |
 | `analytics.trip_demand_hourly` | hora × modalidade × zona de embarque | Apenas corridas válidas |
 | `analytics.trip_weather_hourly` | hora `[hour_utc, +1h)` | Viagens válidas e clima da hora, inclusive horas sem corrida; instantâneas no início da hora, acumulados da observação seguinte (`NULL` na última hora sem a competência seguinte) |
@@ -137,6 +149,15 @@ uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
   clima do mês seguinte). Um `dbt build` reprocessa (delete+insert por `period`) só as
   competências cuja versão mudou: mês republicado → só ele; nova versão de zonas → todas as
   viagens; clima do mês seguinte → o viagens x clima do mês anterior.
+- **Horário de verão:** a TLC publica horário local sem fuso, então `core.trips` trata
+  explicitamente as transições (`local_time_issue`):
+  - `nonexistent` (02:00–02:59 no início do horário de verão): o horário não existe; a corrida
+    fica inválida (`nonexistent_local_time`) e não é convertida para UTC.
+  - `ambiguous` (01:00–01:59 na volta, que ocorre duas vezes): escolhe-se a combinação de
+    ocorrências de embarque e desembarque com menor duração não negativa; no empate (ambos na
+    hora repetida), a primeira ocorrência (EDT). A ordem embarque/desembarque é avaliada em UTC,
+    então uma corrida das 01:50 (EDT) às 01:10 (EST) é válida, com 20 min; na ingestão, que
+    compara o horário local, ela aparece como `dropoff_before_pickup`.
 - `dbt build --full-refresh` reconstrói tudo (necessário após mudar a estrutura de um modelo).
 - Testes dbt: unicidade, não nulos, integridade referencial (corridas válidas), valores aceitos
   e conciliação `core.trips` = `raw` por competência.
@@ -151,10 +172,12 @@ uv run --env-file .env nyc-mobility db upgrade
 uv run --env-file .env nyc-mobility db check
 ```
 
-- Os testes não acessam as APIs públicas: usam Parquet/JSON/CSV gerados em fixtures (`file://`).
+- Os testes não acessam as APIs públicas: usam Parquet/JSON/CSV gerados em fixtures, servidos
+  por `file://` ou por um servidor HTTP local (para as respostas 200/304 do download condicional).
 - Os testes de integração usam bancos descartáveis (`nyc_mobility_test`,
   `nyc_mobility_test_migrations`), recriados a cada execução; o banco de desenvolvimento não é
-  tocado. Cobrem ingestão, idempotência, migrações (ida e volta) e `dbt build` incremental.
+  tocado. Cobrem ingestão, idempotência, download condicional, concorrência, migrações (ida e
+  volta), horário de verão e `dbt build` incremental.
 - **CI** (`.github/workflows/ci.yml`, em PRs e pushes na `main`): Ruff; Pytest com PostgreSQL 17
   (no CI, a ausência do banco falha em vez de pular); migrações + `db check`; build da imagem do
   Airflow e verificação da estrutura da DAG dentro dela. Sem publicação de imagem nem deploy.
@@ -174,13 +197,9 @@ uv run --env-file .env nyc-mobility db check
 
 ## Limitações conhecidas
 
-- **Horário de verão:** a TLC publica horário local sem fuso; na volta do horário de verão,
-  01:00–01:59 ocorre duas vezes e a conversão para UTC escolhe sempre a mesma ocorrência. O
-  `ARCHITECTURE.md` (4.7) pede tratamento explícito antes de processar esses dias (março e
-  novembro); validado apenas para jan–fev/2025.
-- Cada ingestão baixa o arquivo novamente para calcular o hash, mesmo que resulte em `skipped`.
-- Erros de contrato também passam pelos retries da DAG (download repetido, sem efeito colateral).
-- Recusas por concorrência (lock ocupado) não são registradas em `metadata.ingestion_runs`.
+- **Horário de verão:** corridas ambíguas em que as duas ocorrências são igualmente plausíveis
+  (ambos os horários na hora repetida) são resolvidas por regra fixa (primeira ocorrência), sem
+  como confirmar pela origem; ficam identificadas em `local_time_issue = 'ambiguous'`.
 - Clima de um único ponto (Central Park, grade ERA5) para toda a cidade.
 - Testes dbt varrem as tabelas inteiras a cada build, mesmo no incremental.
 - Sem política de retenção na landing: versões antigas se acumulam em `data/landing/`.
@@ -191,5 +210,3 @@ uv run --env-file .env nyc-mobility db check
 
 - **Processamento incremental em dbt** (o item 4.5 previa tabelas reconstruídas no MVP):
   adotado por decisão do projeto, por competência e guiado por `source_version`.
-- **Horário de verão** aceito como limitação documentada (ver acima), em vez do tratamento
-  explícito previsto no item 4.7.

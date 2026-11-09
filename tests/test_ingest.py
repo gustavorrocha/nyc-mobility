@@ -1,5 +1,11 @@
 """Integração da ingestão Yellow com PostgreSQL (banco nyc_mobility_test), sem rede."""
 
+import os
+import threading
+import time
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
 import pytest
 import sqlalchemy as sa
 
@@ -105,3 +111,61 @@ def test_concurrent_load_is_rejected(engine, landing, yellow_parquet, tmp_path):
         with pytest.raises(ConcurrentLoadError):
             ingest("tlc.yellow", "2025-05", url=url, force=True)
     assert raw_files(engine, "2025-05")[0][1] == 5
+    # A recusa fica registrada como falha, sem arquivo associado.
+    with engine.connect() as conn:
+        last = conn.execute(
+            sa.text(
+                "SELECT status, source_file_id, error, details->>'reason' "
+                "FROM metadata.ingestion_runs WHERE period = '2025-05' "
+                "ORDER BY run_id DESC LIMIT 1"
+            )
+        ).one()
+    assert last[:2] == ("failed", None)
+    assert last[2].startswith("ConcurrentLoadError") and last[3] == "carga concorrente"
+
+
+@pytest.fixture
+def http_root(tmp_path):
+    """Servidor HTTP local; responde 304 a If-Modified-Since quando o arquivo não mudou."""
+
+    class Quiet(SimpleHTTPRequestHandler):
+        def log_request(self, code="-", size="-"):
+            requests.append(f"{self.path} {int(code)}")
+
+        def log_message(self, *args):
+            pass
+
+    requests = []
+    root = tmp_path / "www"
+    root.mkdir()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(Quiet, directory=root))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield root, f"http://127.0.0.1:{server.server_port}", requests
+    server.shutdown()
+
+
+def test_unchanged_source_is_not_downloaded_again(engine, landing, yellow_parquet, http_root):
+    root, base, requests = http_root
+    yellow_parquet(root / "y.parquet", "2023-05")
+    url = f"{base}/y.parquet"
+
+    first = ingest("tlc.yellow", "2023-05", url=url)
+    assert first["status"] == "succeeded"
+
+    # Origem inalterada: requisição condicional, 304, nenhum download e nenhuma versão nova.
+    again = ingest("tlc.yellow", "2023-05", url=url)
+    assert (again["status"], again["source_file_id"]) == ("skipped", first["source_file_id"])
+    assert "304" in again["reason"]
+    assert requests == ["/y.parquet 200", "/y.parquet 304"]
+
+    # --force ignora a validação condicional.
+    assert ingest("tlc.yellow", "2023-05", url=url, force=True)["status"] == "succeeded"
+    assert requests[-1] == "/y.parquet 200"
+
+    # Arquivo republicado (conteúdo e data novos): baixado e carregado como nova versão.
+    yellow_parquet(root / "y.parquet", "2023-05", rows=3)
+    os.utime(root / "y.parquet", (time.time() + 60, time.time() + 60))
+    republished = ingest("tlc.yellow", "2023-05", url=url)
+    assert republished["status"] == "succeeded"
+    assert republished["source_file_id"] != first["source_file_id"]
+    assert raw_files(engine, "2023-05") == [(republished["source_file_id"], 3)]

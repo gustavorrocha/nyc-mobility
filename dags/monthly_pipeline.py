@@ -6,18 +6,18 @@ processos próprios. Entre tarefas trafegam apenas os resumos JSON das ingestõe
 
 import json
 import logging
+import subprocess
 from datetime import datetime, timedelta
 
 from airflow.providers.standard.operators.bash import BashOperator
-from airflow.sdk import DAG, Param, task
+from airflow.sdk import DAG, Param, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException
 
 PERIOD_PATTERN = r"^\d{4}-(0[1-9]|1[0-2])$"
+# Código de saída da CLI para arquivo fora do contrato (nyc_mobility.cli.EXIT_CONTRACT_ERROR).
+EXIT_CONTRACT_ERROR = 3
 
-# Competência e --force chegam por variável de ambiente, nunca interpolados no comando.
-INGEST_ENV = {
-    "PERIOD": "{{ params.period }}",
-    "FORCE_FLAG": "{{ '--force' if params.force else '' }}",
-}
+log = logging.getLogger(__name__)
 
 with DAG(
     dag_id="monthly_pipeline",
@@ -42,20 +42,29 @@ with DAG(
     tags=["nyc-mobility"],
 ) as dag:
 
-    def ingest(task_id: str, args: str) -> BashOperator:
-        return BashOperator(
-            task_id=task_id,
-            bash_command=f"nyc-mobility ingest {args}",
-            env=INGEST_ENV,
-            append_env=True,
-            # A CLI imprime o resumo da execução como JSON na última linha.
-            output_processor=json.loads,
-        )
+    @task
+    def ingest(dataset: str, periodic: bool = True) -> dict:
+        """Chama a CLI em processo próprio, com argumentos em lista (sem shell)."""
+        params = get_current_context()["params"]
+        cmd = ["nyc-mobility", "ingest", "--dataset", dataset]
+        if periodic:
+            cmd += ["--period", params["period"]]
+            if params["force"]:
+                cmd.append("--force")
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        log.info("%s\n%s%s", " ".join(cmd), proc.stdout, proc.stderr)
+        if proc.returncode == EXIT_CONTRACT_ERROR:
+            # Arquivo fora do contrato: falha sem retry (repetir baixaria o mesmo arquivo).
+            raise AirflowFailException(proc.stderr.strip().splitlines()[-1])
+        if proc.returncode:
+            raise RuntimeError(f"nyc-mobility terminou com código {proc.returncode}")
+        # A CLI imprime o resumo da execução como JSON na última linha.
+        return json.loads(proc.stdout.strip().splitlines()[-1])
 
     # Referência versionada: sem competência e sem --force (forçar reprocessaria todas as viagens).
-    zones = ingest("tlc_taxi_zones", "--dataset tlc.taxi_zones")
-    yellow = ingest("tlc_yellow", '--dataset tlc.yellow --period "$PERIOD" $FORCE_FLAG')
-    weather = ingest("openmeteo_era5", '--dataset openmeteo.era5 --period "$PERIOD" $FORCE_FLAG')
+    zones = ingest.override(task_id="tlc_taxi_zones")("tlc.taxi_zones", periodic=False)
+    yellow = ingest.override(task_id="tlc_yellow")("tlc.yellow")
+    weather = ingest.override(task_id="openmeteo_era5")("openmeteo.era5")
 
     # Só roda com as três fontes concluídas (succeeded ou skipped). Sem retry: falhas de modelo
     # ou de teste são determinísticas; reexecutar só o dbt = "Clear" nesta tarefa.
@@ -64,9 +73,9 @@ with DAG(
     @task
     def summary(*results: dict) -> dict:
         """Resultado consolidado da execução (também em metadata.ingestion_runs)."""
-        keys = ("status", "run_id", "source_file_id", "rows_inserted", "rows_flagged")
+        keys = ("status", "reason", "run_id", "source_file_id", "rows_inserted", "rows_flagged")
         report = {r["dataset"]: {k: r.get(k) for k in keys} for r in results}
-        logging.getLogger(__name__).info("Resumo: %s", json.dumps(report, ensure_ascii=False))
+        log.info("Resumo: %s", json.dumps(report, ensure_ascii=False))
         return report
 
-    [zones, yellow, weather] >> dbt_build >> summary(zones.output, yellow.output, weather.output)
+    [zones, yellow, weather] >> dbt_build >> summary(zones, yellow, weather)

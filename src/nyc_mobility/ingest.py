@@ -29,23 +29,25 @@ def ingest(
         period_bounds(period or "")
     elif period is not None:
         raise ValueError(f"{dataset} é uma referência sem competência; não informe period")
-    root = landing_dir()
-    dest = root / adapter.SOURCE / adapter.DATASET / (period or "")
-    landed = landing.download(
-        url or adapter.url(period),
-        dest,
-        name=adapter.landing_name(period) if hasattr(adapter, "landing_name") else None,
-        fingerprint=getattr(adapter, "fingerprint", None),
-    )
     engine = sa.create_engine(database_url(), poolclass=sa.pool.NullPool)
     raw = engine.raw_connection()
     try:
-        return _ingest(raw.driver_connection, adapter, dataset, period, landed, root, force)
+        return _ingest(raw.driver_connection, adapter, dataset, period, url, force)
     finally:
         raw.close()  # encerra a sessão e libera o advisory lock
 
 
-def _ingest(pg, adapter, dataset, period, landed, root, force) -> dict:
+def _skip(cur, summary, source_id, period, source_file_id, reason) -> dict:
+    cur.execute(
+        """INSERT INTO metadata.ingestion_runs
+               (source_id, period, source_file_id, status, finished_at, details)
+           VALUES (%s, %s, %s, 'skipped', now(), %s) RETURNING run_id""",
+        (source_id, period, source_file_id, json.dumps({"reason": reason})),
+    )
+    return {**summary, "run_id": cur.fetchone()[0], "status": "skipped", "reason": reason}
+
+
+def _ingest(pg, adapter, dataset, period, url, force) -> dict:
     cur = pg.cursor()
     cur.execute(
         """INSERT INTO metadata.sources (source, dataset) VALUES (%s, %s)
@@ -61,7 +63,58 @@ def _ingest(pg, adapter, dataset, period, landed, root, force) -> dict:
     lock_key = int(period.replace("-", "")) if period else 0
     cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (source_id, lock_key))
     if not cur.fetchone()[0]:
-        raise ConcurrentLoadError(f"Carga de {dataset} {period or ''} já em andamento")
+        # A recusa também fica registrada (sem arquivo associado: nada foi baixado).
+        message = f"Carga de {dataset} {period or ''} já em andamento"
+        cur.execute(
+            """INSERT INTO metadata.ingestion_runs
+                   (source_id, period, status, finished_at, error, details)
+               VALUES (%s, %s, 'failed', now(), %s, %s)""",
+            (
+                source_id,
+                period,
+                f"ConcurrentLoadError: {message}",
+                json.dumps({"reason": "carga concorrente"}),
+            ),
+        )
+        pg.commit()
+        raise ConcurrentLoadError(message)
+
+    cur.execute(
+        """SELECT r.source_file_id, f.sha256, f.acquisition_params
+           FROM metadata.ingestion_runs r JOIN metadata.source_files f USING (source_file_id)
+           WHERE r.source_id = %s AND r.period IS NOT DISTINCT FROM %s
+             AND r.status = 'succeeded'
+           ORDER BY r.run_id DESC LIMIT 1""",
+        (source_id, period),
+    )
+    published = cur.fetchone()
+
+    # Download condicional: se a origem confirmar que a versão publicada não mudou (HTTP 304),
+    # a execução é registrada como skipped sem baixar o arquivo de novo.
+    source_url = url or adapter.url(period)
+    validators = None
+    if published and not force and published[2].get("url") == source_url:
+        validators = published[2]
+    root = landing_dir()
+    landed = landing.download(
+        source_url,
+        root / adapter.SOURCE / adapter.DATASET / (period or ""),
+        name=adapter.landing_name(period) if hasattr(adapter, "landing_name") else None,
+        fingerprint=getattr(adapter, "fingerprint", None),
+        validators=validators,
+    )
+    if landed is None:
+        summary = {
+            "dataset": dataset,
+            "period": period,
+            "source_file_id": published[0],
+            "sha256": published[1],
+        }
+        result = _skip(
+            cur, summary, source_id, period, published[0], "não modificado na origem (HTTP 304)"
+        )
+        pg.commit()
+        return result
 
     cur.execute(
         """INSERT INTO metadata.source_files
@@ -87,28 +140,12 @@ def _ingest(pg, adapter, dataset, period, landed, root, force) -> dict:
         "sha256": landed.sha256,
     }
 
-    cur.execute(
-        """SELECT source_file_id FROM metadata.ingestion_runs
-           WHERE source_id = %s AND period IS NOT DISTINCT FROM %s AND status = 'succeeded'
-           ORDER BY run_id DESC LIMIT 1""",
-        (source_id, period),
-    )
-    published = cur.fetchone()
     if not force and published and published[0] == source_file_id:
-        cur.execute(
-            """INSERT INTO metadata.ingestion_runs
-                   (source_id, period, source_file_id, status, finished_at, details)
-               VALUES (%s, %s, %s, 'skipped', now(), %s) RETURNING run_id""",
-            (
-                source_id,
-                period,
-                source_file_id,
-                json.dumps({"reason": "versão (hash) já publicada"}),
-            ),
+        result = _skip(
+            cur, summary, source_id, period, source_file_id, "versão (hash) já publicada"
         )
-        summary.update(run_id=cur.fetchone()[0], status="skipped")
         pg.commit()
-        return summary
+        return result
 
     cur.execute(
         """INSERT INTO metadata.ingestion_runs
