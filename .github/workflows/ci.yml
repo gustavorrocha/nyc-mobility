@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: nyc
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: nyc_mobility
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nyc" --health-interval 5s --health-timeout 5s
+          --health-retries 10
+    env:
+      # Credenciais descartáveis, válidas apenas no container de serviço deste job.
+      POSTGRES_USER: nyc
+      POSTGRES_PASSWORD: ci-only
+      POSTGRES_DB: nyc_mobility
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -rs
+      - run: uv run nyc-mobility db upgrade && uv run nyc-mobility db check
+      - run: uv run dbt parse --project-dir dbt --profiles-dir dbt
+
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      # Somente build: sem push de imagem nem deploy no MVP.
+      - run: docker build -f docker/airflow/Dockerfile -t nyc-mobility-airflow:ci .
