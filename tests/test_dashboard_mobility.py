@@ -1,7 +1,9 @@
 """Página Mobilidade urbana: filtros e visualizações (as consultas são testadas em
 test_transform.py, sobre o analytics produzido pelo dbt)."""
 
+import json
 from datetime import date, datetime
+from pathlib import Path
 
 from dashboard import mobility
 
@@ -72,3 +74,31 @@ def test_update_without_period_returns_empty_page():
     kpis, *figures = mobility.update(None, None, None, None, ["yellow"])
     assert len(figures) == 3  # um valor por Output (o Dash não aceita listas aninhadas)
     assert kpis == [] and all(f.layout.annotations for f in figures)
+
+
+def test_map_uses_log_scale_and_highlights_selected_zones():
+    rows = [
+        {"zone_id": 132, "zone": "JFK Airport", "borough": "Queens", "trips": 250000},
+        {"zone_id": 7, "zone": "Astoria", "borough": "Queens", "trips": 30},
+    ]
+    trace = mobility.map_figure(rows, [7]).data[0]
+    assert trace.geojson == mobility.GEOJSON_URL  # URL: o navegador baixa a geometria uma vez
+    assert list(trace.locations) == [132, 7]
+    assert list(trace.colorbar.ticktext) == ["10", "100", "1.000", "10.000", "100.000"]
+    assert list(trace.selectedpoints) == [1]
+    assert mobility.map_figure(rows, None).data[0].selectedpoints is None
+
+
+def test_click_on_map_toggles_zone_in_filter():
+    click = {"points": [{"location": 7}]}
+    assert mobility.toggle_zone(click, None) == ([7], None)
+    assert mobility.toggle_zone(click, [4, 7]) == ([4], None)
+    assert mobility.toggle_zone(None, [4]) == (mobility.no_update, mobility.no_update)
+
+
+def test_geojson_asset_covers_all_taxi_zones():
+    path = Path(mobility.__file__).parent / "assets" / "taxi_zones.geojson"
+    features = json.loads(path.read_text(encoding="utf-8"))["features"]
+    assert sorted(f["properties"]["zone_id"] for f in features) == list(range(1, 264))
+    lon, lat = features[0]["geometry"]["coordinates"][0][0]  # zona 1 (EWR), em WGS84
+    assert -74.3 < lon < -74.1 and 40.6 < lat < 40.8

@@ -1,12 +1,13 @@
-"""Página 1 — Mobilidade urbana: KPIs, demanda no tempo, heatmap hora × dia e ranking de zonas.
+"""Página 1 — Mobilidade urbana: KPIs, demanda no tempo, heatmap, mapa e ranking de zonas.
 
 Fonte: analytics.trip_demand_hourly (corridas válidas por hora local × modalidade × zona de
 embarque). As médias de distância e duração são ponderadas pelo número de corridas.
 """
 
+import math
 from datetime import date, timedelta
 
-from dash import Input, Output, callback, dcc, html
+from dash import Input, Output, State, callback, dcc, html, no_update
 
 from dashboard import theme
 from dashboard.db import query
@@ -14,6 +15,9 @@ from dashboard.db import query
 WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 HOURLY_MAX_DAYS = 7  # até 7 dias, demanda por hora; acima, por dia
 TOP_ZONES = 15
+# Gerado por scripts/taxi_zones_geojson.py; o navegador baixa uma vez (fora dos callbacks).
+GEOJSON_URL = "/assets/taxi_zones.geojson"
+NYC_CENTER = {"lat": 40.70, "lon": -73.94}
 
 SOURCE = "analytics.trip_demand_hourly AS d JOIN core.zones AS z ON z.zone_id = d.pickup_zone_id"
 WHERE = """
@@ -89,6 +93,15 @@ def load_ranking(p: dict) -> list[dict]:
             FROM {SOURCE} WHERE {WHERE}
             GROUP BY 1, 2, 3 ORDER BY trips DESC, z.zone LIMIT %(top)s""",
         {**p, "top": TOP_ZONES},
+    )
+
+
+def load_zone_trips(p: dict) -> list[dict]:
+    """Corridas por zona para o mapa; ignora o filtro de zonas para todas seguirem clicáveis."""
+    return query(
+        f"""SELECT z.zone_id, z.zone, z.borough, sum(d.trip_count)::bigint AS trips
+            FROM {SOURCE} WHERE {WHERE} GROUP BY 1, 2, 3""",
+        {**p, "zones": None},
     )
 
 
@@ -170,9 +183,8 @@ def heatmap_figure(rows: list[dict], days: list[date]):
 def ranking_figure(rows: list[dict]):
     if not rows:
         return theme.empty()
-    positions = list(
-        range(len(rows))
-    )  # posição numérica: zonas homônimas (ex.: Corona) não colidem
+    # Posição numérica no eixo: zonas homônimas (ex.: os dois Corona) não colidem.
+    positions = list(range(len(rows)))
     fig = theme.figure(margin={"l": 8, "r": 90, "t": 8, "b": 8}, bargap=0.25)
     fig.add_bar(
         x=[r["trips"] for r in rows],
@@ -192,11 +204,48 @@ def ranking_figure(rows: list[dict]):
     fig.update_yaxes(
         tickvals=positions,
         ticktext=[r["zone"] for r in rows],
-        autorange="reversed",
+        range=[TOP_ZONES - 0.5, -0.5],  # invertido e fixo: poucas zonas não viram barras gigantes
         showgrid=False,
         tickfont={"color": theme.INK},
     )
     fig.update_xaxes(visible=False)
+    return fig
+
+
+def map_figure(rows: list[dict], selected: list[int] | None):
+    """Coroplético em escala log (as corridas vão de unidades a centenas de milhares por zona)."""
+    if not rows:
+        return theme.empty()
+    trips = [r["trips"] for r in rows]
+    ticks = [10**e for e in range(int(math.log10(min(trips))), int(math.log10(max(trips))) + 1)]
+    fig = theme.figure(
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        map={"style": "carto-positron", "center": NYC_CENTER, "zoom": 9.2},
+        uirevision="map",  # mantém zoom e posição quando os filtros mudam
+    )
+    fig.add_choroplethmap(
+        geojson=GEOJSON_URL,
+        featureidkey="properties.zone_id",
+        locations=[r["zone_id"] for r in rows],
+        z=[math.log10(t) for t in trips],
+        colorscale=[[i / (len(theme.SEQUENTIAL) - 1), c] for i, c in enumerate(theme.SEQUENTIAL)],
+        marker={"line": {"width": 0.6, "color": "#ffffff"}, "opacity": 0.85},
+        colorbar={
+            "thickness": 10,
+            "outlinewidth": 0,
+            "tickvals": [math.log10(t) for t in ticks],
+            "ticktext": [theme.number(t) for t in ticks],
+        },
+        customdata=[[r["zone"], r["borough"], r["trips"]] for r in rows],
+        hovertemplate=(
+            "<b>%{customdata[0]}</b> (%{customdata[1]})<br>%{customdata[2]:,.0f} corridas"
+            "<br><i>clique para filtrar</i><extra></extra>"
+        ),
+        selectedpoints=[i for i, r in enumerate(rows) if r["zone_id"] in selected]
+        if selected
+        else None,
+        unselected={"marker": {"opacity": 0.2}},
+    )
     return fig
 
 
@@ -236,16 +285,23 @@ def layout() -> list:
                     wide=True,
                 ),
                 _chart(
-                    "Horário e dia da semana",
-                    "m-heatmap",
-                    "Média de corridas por dia, em cada hora local de embarque.",
-                    380,
+                    "Mapa das zonas de embarque",
+                    "m-map",
+                    "Corridas por Taxi Zone (escala log). Clique numa zona para filtrar.",
+                    480,
                 ),
                 _chart(
                     f"Top {TOP_ZONES} zonas de embarque",
                     "m-ranking",
                     "Corridas e participação no total filtrado.",
-                    380,
+                    480,
+                ),
+                _chart(
+                    "Horário e dia da semana",
+                    "m-heatmap",
+                    "Média de corridas por dia, em cada hora local de embarque.",
+                    340,
+                    wide=True,
                 ),
             ],
         ),
@@ -275,3 +331,33 @@ def update(start, end, borough, zones, services):
         heatmap_figure(load_heatmap(p), days),
         ranking_figure(load_ranking(p)),
     )
+
+
+@callback(
+    Output("m-map", "figure"),
+    Input("f-period", "start_date"),
+    Input("f-period", "end_date"),
+    Input("f-borough", "value"),
+    Input("f-zones", "value"),
+    Input("f-service", "value"),
+)
+def update_map(start, end, borough, zones, services):
+    if not start or not end:
+        return theme.empty()
+    return map_figure(load_zone_trips(params(start, end, borough, zones, services)), zones)
+
+
+@callback(
+    Output("f-zones", "value", allow_duplicate=True),
+    Output("m-map", "clickData"),
+    Input("m-map", "clickData"),
+    State("f-zones", "value"),
+    prevent_initial_call=True,
+)
+def toggle_zone(click, selected):
+    """Clique no mapa inclui ou retira a zona do filtro (clickData zerado: novo clique conta)."""
+    if not click:
+        return no_update, no_update
+    zone = click["points"][0]["location"]
+    selected = list(selected or [])
+    return ([z for z in selected if z != zone] if zone in selected else [*selected, zone]), None

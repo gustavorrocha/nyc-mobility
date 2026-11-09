@@ -124,6 +124,10 @@ def test_dashboard_mobility_queries(engine, monkeypatch):
     ]
     for other in ({"borough": "Q"}, {"zones": [2]}, {"services": ["green"]}):
         assert mobility.load_kpis({**p, **other})["trips"] is None
+    # Mapa: ignora o filtro de zonas (todas continuam clicáveis), mas respeita os demais.
+    expected = [{"zone_id": 1, "zone": "A", "borough": "EWR", "trips": 4}]
+    assert mobility.load_zone_trips({**p, "zones": [2]}) == expected
+    assert mobility.load_zone_trips({**p, "borough": "Q"}) == []
 
 
 def test_dbt_incremental_reprocesses_only_changed_periods(
