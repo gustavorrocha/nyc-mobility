@@ -63,7 +63,21 @@ def _ingest(pg, adapter, dataset, period, url, force) -> dict:
     lock_key = int(period.replace("-", "")) if period else 0
     cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (source_id, lock_key))
     if not cur.fetchone()[0]:
-        raise ConcurrentLoadError(f"Carga de {dataset} {period or ''} já em andamento")
+        # A recusa também fica registrada (sem arquivo associado: nada foi baixado).
+        message = f"Carga de {dataset} {period or ''} já em andamento"
+        cur.execute(
+            """INSERT INTO metadata.ingestion_runs
+                   (source_id, period, status, finished_at, error, details)
+               VALUES (%s, %s, 'failed', now(), %s, %s)""",
+            (
+                source_id,
+                period,
+                f"ConcurrentLoadError: {message}",
+                json.dumps({"reason": "carga concorrente"}),
+            ),
+        )
+        pg.commit()
+        raise ConcurrentLoadError(message)
 
     cur.execute(
         """SELECT r.source_file_id, f.sha256, f.acquisition_params

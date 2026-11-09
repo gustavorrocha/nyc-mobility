@@ -111,6 +111,17 @@ def test_concurrent_load_is_rejected(engine, landing, yellow_parquet, tmp_path):
         with pytest.raises(ConcurrentLoadError):
             ingest("tlc.yellow", "2025-05", url=url, force=True)
     assert raw_files(engine, "2025-05")[0][1] == 5
+    # A recusa fica registrada como falha, sem arquivo associado.
+    with engine.connect() as conn:
+        last = conn.execute(
+            sa.text(
+                "SELECT status, source_file_id, error, details->>'reason' "
+                "FROM metadata.ingestion_runs WHERE period = '2025-05' "
+                "ORDER BY run_id DESC LIMIT 1"
+            )
+        ).one()
+    assert last[:2] == ("failed", None)
+    assert last[2].startswith("ConcurrentLoadError") and last[3] == "carga concorrente"
 
 
 @pytest.fixture

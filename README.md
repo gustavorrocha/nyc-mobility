@@ -88,7 +88,9 @@ openmeteo_era5 ─┘
   Para reexecutar só as transformações: *Clear* em `dbt_build` com *Downstream* marcado.
 - `force=true` recarrega Yellow e clima mesmo sem hash novo (zonas nunca são forçadas).
 - Uma execução ativa por vez; cargas concorrentes da mesma fonte/competência também são
-  barradas no PostgreSQL (advisory lock).
+  barradas no PostgreSQL (advisory lock), inclusive fora do Airflow. A recusa fica registrada em
+  `metadata.ingestion_runs` como `failed` (motivo `carga concorrente`, sem arquivo associado) e
+  a tarefa tenta de novo pelos retries.
 - Linhas inseridas por modelo: log de `dbt_build` (`INSERT 0 N`).
 
 ## Ingestão
@@ -192,7 +194,6 @@ uv run --env-file .env nyc-mobility db check
 - **Horário de verão:** corridas ambíguas em que as duas ocorrências são igualmente plausíveis
   (ambos os horários na hora repetida) são resolvidas por regra fixa (primeira ocorrência), sem
   como confirmar pela origem; ficam identificadas em `local_time_issue = 'ambiguous'`.
-- Recusas por concorrência (lock ocupado) não são registradas em `metadata.ingestion_runs`.
 - Clima de um único ponto (Central Park, grade ERA5) para toda a cidade.
 - Testes dbt varrem as tabelas inteiras a cada build, mesmo no incremental.
 - Sem política de retenção na landing: versões antigas se acumulam em `data/landing/`.
