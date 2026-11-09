@@ -40,6 +40,7 @@ docker compose exec airflow-scheduler airflow dags trigger monthly_pipeline -c '
 # 4. Acompanhe em http://127.0.0.1:8080 → monthly_pipeline (sem login; só uso local)
 
 # 5. Consulte os resultados (ou conecte um cliente SQL em 127.0.0.1:5432)
+#    Portas configuráveis no .env: AIRFLOW_HOST_PORT e POSTGRES_HOST_PORT
 docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d nyc_mobility'
 ```
 
@@ -117,8 +118,11 @@ docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.taxi_zon
   TLC), a requisição é condicional; se a origem responder 304, a execução é `skipped` sem baixar
   o arquivo. A Open-Meteo não envia esses cabeçalhos e é sempre baixada (JSON pequeno).
 - Mesmo hash já publicado → execução registrada como `skipped`. Hash novo ou `--force` →
-  staging temporário e substituição da competência em `raw` numa transação; falhas preservam a
-  versão anterior.
+  validação e substituição da competência (ou do cadastro inteiro, nas zonas) em `raw` numa
+  transação, com staging temporário no Yellow; falhas preservam a versão anterior.
+- Códigos de saída da CLI: `0` sucesso (inclusive `skipped`), `3` erro de contrato (arquivo
+  fora do esperado; não adianta repetir), `2` uso inválido, `1` demais erros (rede, carga
+  concorrente etc.).
 - Execuções, contagens, registros sinalizados por motivo e erros ficam em
   `metadata.ingestion_runs`; arquivos e hashes em `metadata.source_files`.
 
@@ -168,10 +172,12 @@ uv run --env-file .env nyc-mobility db upgrade
 uv run --env-file .env nyc-mobility db check
 ```
 
-- Os testes não acessam as APIs públicas: usam Parquet/JSON/CSV gerados em fixtures (`file://`).
+- Os testes não acessam as APIs públicas: usam Parquet/JSON/CSV gerados em fixtures, servidos
+  por `file://` ou por um servidor HTTP local (para as respostas 200/304 do download condicional).
 - Os testes de integração usam bancos descartáveis (`nyc_mobility_test`,
   `nyc_mobility_test_migrations`), recriados a cada execução; o banco de desenvolvimento não é
-  tocado. Cobrem ingestão, idempotência, migrações (ida e volta) e `dbt build` incremental.
+  tocado. Cobrem ingestão, idempotência, download condicional, concorrência, migrações (ida e
+  volta), horário de verão e `dbt build` incremental.
 - **CI** (`.github/workflows/ci.yml`, em PRs e pushes na `main`): Ruff; Pytest com PostgreSQL 17
   (no CI, a ausência do banco falha em vez de pular); migrações + `db check`; build da imagem do
   Airflow e verificação da estrutura da DAG dentro dela. Sem publicação de imagem nem deploy.
