@@ -60,6 +60,30 @@ uv run --env-file .env dbt debug --project-dir dbt --profiles-dir dbt
 sobre fixtures (dentro do Pytest), migrações + `db check` e build da imagem do Airflow (sem push
 nem deploy).
 
+## Orquestração (Airflow)
+
+DAG `monthly_pipeline` (`dags/monthly_pipeline.py`), disparada manualmente com a competência:
+
+```bash
+docker compose exec airflow-scheduler airflow dags trigger monthly_pipeline -c '{"period": "2025-02"}'
+# ou pela UI: http://127.0.0.1:8080 → monthly_pipeline → Trigger (period, force)
+```
+
+```text
+tlc_taxi_zones ─┐
+tlc_yellow ─────┼─> dbt_build ─> summary
+openmeteo_era5 ─┘
+```
+
+- Ingestões em paralelo via CLI `nyc-mobility ingest` (processos próprios), com 3 retries e
+  backoff exponencial; o resumo JSON de cada uma vai para o XCom e é consolidado em `summary`.
+- `dbt_build` só roda se as três fontes concluírem (`succeeded` ou `skipped`); sem retry.
+  Para reexecutar só as transformações, use *Clear* em `dbt_build`.
+- `force=true` recarrega Yellow e clima mesmo sem hash novo (zonas nunca são forçadas).
+- Uma execução ativa por vez; cargas concorrentes da mesma fonte/competência também são
+  barradas no PostgreSQL.
+- Mudanças em `dbt/` exigem rebuild da imagem (`docker compose up -d --build ...`).
+
 ## Transformação (dbt)
 
 ```bash
