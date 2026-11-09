@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Versão publicada de cada fonte/competência, carregada pela CLI de ingestão.
+    tables:
+      - name: tlc_yellow_trips
+      - name: tlc_taxi_zones
+      - name: openmeteo_weather_hourly

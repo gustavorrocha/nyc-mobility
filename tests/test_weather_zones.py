@@ -148,7 +148,7 @@ def test_zones_are_a_versioned_reference(engine, landing, tmp_path):
         engine,
         "SELECT status, period FROM metadata.ingestion_runs r "
         "JOIN metadata.sources s USING (source_id) WHERE s.dataset = 'taxi_zones' "
-        "ORDER BY run_id",
+        f"AND run_id >= {v1['run_id']} ORDER BY run_id",  # ignora cargas de outros testes
     )
     assert statuses == [
         ("succeeded", None),

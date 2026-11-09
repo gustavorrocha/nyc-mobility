@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: trip_demand_hourly
+    description: Corridas válidas por hora de embarque (UTC), modalidade e zona de embarque.
+    columns:
+      - name: hour_utc
+        data_tests: [not_null]
+      - name: trip_count
+        data_tests: [not_null]
+
+  - name: trip_weather_hourly
+    description: Corridas válidas e clima por hora, incluindo horas sem corridas (trip_count = 0).
+    columns:
+      - name: hour_utc
+        data_tests: [unique, not_null]
+      - name: trip_count
+        data_tests: [not_null]
