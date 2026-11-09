@@ -22,3 +22,26 @@ def test_upgrade_is_idempotent_and_creates_schemas(engine):
         "raw.tlc_taxi_zones",
         "raw.openmeteo_weather_hourly",
     }
+
+
+def test_migrations_are_reversible(engine, monkeypatch):
+    """upgrade → downgrade base → upgrade num banco vazio próprio (o da sessão tem dados)."""
+    name = "nyc_mobility_test_migrations"
+    admin = sa.create_engine(
+        engine.url.set(database="postgres"),
+        isolation_level="AUTOCOMMIT",
+        poolclass=sa.pool.NullPool,
+    )
+    with admin.connect() as conn:
+        conn.execute(sa.text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+        conn.execute(sa.text(f"CREATE DATABASE {name}"))
+    monkeypatch.setenv("POSTGRES_DB", name)
+    try:
+        db.upgrade()
+        db.downgrade("base")
+        assert sorted(db.missing_schemas()) == sorted(db.SCHEMAS)
+        db.upgrade()
+        assert db.missing_schemas() == []
+    finally:
+        with admin.connect() as conn:
+            conn.execute(sa.text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))

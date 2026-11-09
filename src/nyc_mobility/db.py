@@ -7,11 +7,20 @@ from nyc_mobility.config import database_url
 SCHEMAS = ("raw", "core", "analytics", "metadata")
 
 
-def upgrade() -> None:
-    """Aplica as migrações Alembic até a revisão mais recente (idempotente)."""
+def _config() -> Config:
     cfg = Config()
     cfg.set_main_option("script_location", "nyc_mobility:migrations")
-    command.upgrade(cfg, "head")
+    return cfg
+
+
+def upgrade() -> None:
+    """Aplica as migrações Alembic até a revisão mais recente (idempotente)."""
+    command.upgrade(_config(), "head")
+
+
+def downgrade(revision: str) -> None:
+    """Reverte as migrações até `revision` (usado nos testes de reversibilidade)."""
+    command.downgrade(_config(), revision)
 
 
 def missing_schemas() -> list[str]:
