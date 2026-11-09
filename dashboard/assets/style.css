@@ -1,0 +1,80 @@
+/* NYC Mobility Explorer: carregado automaticamente pelo Dash (pasta assets/). */
+:root {
+  --ink: #1b2430;
+  --muted: #5d6b7a;
+  --bg: #f4f6f8;
+  --card: #ffffff;
+  --line: #dde3ea;
+  --accent: #f2b705; /* amarelo dos táxis */
+  --nav: #111a24;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+body { margin: 0; }
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 32px;
+  padding: 14px 32px;
+  background: var(--nav);
+  color: #fff;
+  border-bottom: 4px solid var(--accent);
+}
+
+.brand h1 { margin: 0; font-size: 1.35rem; letter-spacing: 0.01em; }
+.brand p { margin: 2px 0 0; color: #a9b6c4; font-size: 0.85rem; }
+
+.nav { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.nav-link {
+  padding: 8px 14px;
+  border-radius: 6px;
+  color: #d5dde6;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.nav-link:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.nav-link.active { background: var(--accent); color: var(--nav); }
+.nav-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  padding: 16px 32px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.page { max-width: 1400px; margin: 0 auto; padding: 24px 32px 48px; }
+.page h2 { margin: 0 0 4px; font-size: 1.4rem; }
+.lead { margin: 0 0 20px; color: var(--muted); }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+}
+
+.placeholder { color: var(--muted); text-align: center; padding: 64px 20px; border-style: dashed; }
+
+@media (max-width: 640px) {
+  .topbar, .filters, .page { padding-left: 16px; padding-right: 16px; }
+}

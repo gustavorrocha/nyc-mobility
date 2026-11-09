@@ -78,6 +78,20 @@ def test_dbt_build_core_and_analytics(engine, landing, yellow_parquet, tmp_path,
         "count(*) FILTER (WHERE precipitation_mm IS NULL) FROM analytics.trip_weather_hourly "
         "WHERE period IN ('2024-02', '2024-03') GROUP BY 1",
     ) == [("2024-02", 696, 4, 692, 1)]
+    # Dashboard: dbt concede leitura só aos modelos liberados (+grants em dbt_project.yml).
+    assert rows(
+        engine,
+        "SELECT t, has_table_privilege('dashboard_reader', t, 'SELECT') FROM unnest(ARRAY["
+        "'analytics.trip_demand_hourly', 'analytics.trip_weather_hourly', 'core.zones', "
+        "'core.service_types', 'core.trips', 'core.weather_hourly']) AS t ORDER BY t",
+    ) == [
+        ("analytics.trip_demand_hourly", True),
+        ("analytics.trip_weather_hourly", True),
+        ("core.service_types", True),
+        ("core.trips", False),
+        ("core.weather_hourly", False),
+        ("core.zones", True),
+    ]
 
 
 def test_dbt_incremental_reprocesses_only_changed_periods(

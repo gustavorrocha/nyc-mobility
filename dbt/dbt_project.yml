@@ -14,9 +14,14 @@ models:
     +materialized: table
     core:
       +schema: core
+      # Leitura do dashboard (usuário criado pela migração Alembic 0004); dbt reaplica a cada build.
+      zones:
+        +grants: {select: [dashboard_reader]}
     analytics:
       +schema: analytics
+      +grants: {select: [dashboard_reader]}
 
 seeds:
   nyc_mobility:
     +schema: core
+    +grants: {select: [dashboard_reader]}
