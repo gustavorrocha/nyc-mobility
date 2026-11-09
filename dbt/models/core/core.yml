@@ -36,10 +36,20 @@ models:
               arguments:
                 values:
                   - missing_required_value
+                  - nonexistent_local_time
                   - dropoff_before_pickup
                   - negative_distance
                   - pickup_outside_period
                   - unknown_zone
+      - name: local_time_issue
+        description: >
+          Horário local na mudança de horário de verão: `nonexistent` (02:00–02:59 no início;
+          corrida inválida, sem conversão para UTC) ou `ambiguous` (01:00–01:59 na volta;
+          resolvido pela combinação de ocorrências com menor duração não negativa e, no empate,
+          pela primeira ocorrência).
+        data_tests:
+          - accepted_values:
+              arguments: {values: [nonexistent, ambiguous]}
       - name: pickup_zone_id
         data_tests:
           - relationships:

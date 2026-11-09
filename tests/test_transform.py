@@ -131,3 +131,42 @@ def test_dbt_incremental_reprocesses_only_changed_periods(
     assert built["trip_weather_hourly"] == count(
         "SELECT count(*) FROM analytics.trip_weather_hourly"
     )
+
+
+def test_dst_local_times_are_flagged_and_resolved(engine, landing, yellow_parquet, tmp_path):
+    # Volta do horário de verão em 02/11/2025: 01:00–01:59 ocorre em EDT (UTC-4) e depois em
+    # EST (UTC-5). Início em 09/03/2025: 02:00–02:59 não existe.
+    fall = [
+        ("2025-11-02T01:40", "2025-11-02T02:05"),  # embarque ambíguo → EST (25 min)
+        ("2025-11-02T00:50", "2025-11-02T01:10"),  # desembarque ambíguo → EDT (20 min)
+        ("2025-11-02T01:20", "2025-11-02T01:35"),  # ambos ambíguos, empate → 1ª ocorrência
+        ("2025-11-02T01:50", "2025-11-02T01:10"),  # "antes" no relógio, mas EDT → EST (20 min)
+        ("2025-11-02T10:00", "2025-11-02T10:15"),  # comum
+    ]
+    spring = [
+        ("2025-03-09T02:30", "2025-03-09T02:45"),  # inexistente
+        ("2025-03-09T01:50", "2025-03-09T03:10"),  # atravessa o salto (20 min)
+    ]
+    ingest(
+        "tlc.yellow", "2025-11", url=yellow_parquet(tmp_path / "f.parquet", "2025-11", times=fall)
+    )
+    ingest(
+        "tlc.yellow", "2025-03", url=yellow_parquet(tmp_path / "s.parquet", "2025-03", times=spring)
+    )
+    dbt_build()
+
+    assert rows(
+        engine,
+        "SELECT source_row_number, local_time_issue, "
+        "to_char(pickup_at_utc AT TIME ZONE 'UTC', 'HH24:MI'), duration_seconds / 60, "
+        "invalid_reason FROM core.trips WHERE period IN ('2025-03', '2025-11') "
+        "ORDER BY period DESC, source_row_number",
+    ) == [
+        (1, "ambiguous", "06:40", 25, None),
+        (2, "ambiguous", "04:50", 20, None),
+        (3, "ambiguous", "05:20", 15, None),
+        (4, "ambiguous", "05:50", 20, None),
+        (5, None, "15:00", 15, None),
+        (1, "nonexistent", None, None, "nonexistent_local_time"),
+        (2, None, "06:50", 20, None),
+    ]

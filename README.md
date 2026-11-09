@@ -125,7 +125,7 @@ uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
 |---|---|---|
 | `core.zones` | zona | Cadastro TLC; strings vazias viram `NULL` |
 | `core.service_types` | modalidade | Seed; no MVP, apenas `yellow` |
-| `core.trips` | corrida | Uma linha por registro de `raw` (nada é excluído); `is_valid` e `invalid_reason` (`missing_required_value`, `dropoff_before_pickup`, `negative_distance`, `pickup_outside_period`, `unknown_zone`); horários locais originais e em UTC |
+| `core.trips` | corrida | Uma linha por registro de `raw` (nada é excluído); `is_valid` e `invalid_reason` (`missing_required_value`, `nonexistent_local_time`, `dropoff_before_pickup`, `negative_distance`, `pickup_outside_period`, `unknown_zone`); horários locais originais e em UTC; `local_time_issue` nas mudanças de horário de verão |
 | `core.weather_hourly` | hora UTC | Semântica da fonte: acumulados referem-se à hora anterior a `observed_at_utc` |
 | `analytics.trip_demand_hourly` | hora × modalidade × zona de embarque | Apenas corridas válidas |
 | `analytics.trip_weather_hourly` | hora `[hour_utc, +1h)` | Viagens válidas e clima da hora, inclusive horas sem corrida; instantâneas no início da hora, acumulados da observação seguinte (`NULL` na última hora sem a competência seguinte) |
@@ -137,6 +137,15 @@ uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
   clima do mês seguinte). Um `dbt build` reprocessa (delete+insert por `period`) só as
   competências cuja versão mudou: mês republicado → só ele; nova versão de zonas → todas as
   viagens; clima do mês seguinte → o viagens x clima do mês anterior.
+- **Horário de verão:** a TLC publica horário local sem fuso, então `core.trips` trata
+  explicitamente as transições (`local_time_issue`):
+  - `nonexistent` (02:00–02:59 no início do horário de verão): o horário não existe; a corrida
+    fica inválida (`nonexistent_local_time`) e não é convertida para UTC.
+  - `ambiguous` (01:00–01:59 na volta, que ocorre duas vezes): escolhe-se a combinação de
+    ocorrências de embarque e desembarque com menor duração não negativa; no empate (ambos na
+    hora repetida), a primeira ocorrência (EDT). A ordem embarque/desembarque é avaliada em UTC,
+    então uma corrida das 01:50 (EDT) às 01:10 (EST) é válida, com 20 min; na ingestão, que
+    compara o horário local, ela aparece como `dropoff_before_pickup`.
 - `dbt build --full-refresh` reconstrói tudo (necessário após mudar a estrutura de um modelo).
 - Testes dbt: unicidade, não nulos, integridade referencial (corridas válidas), valores aceitos
   e conciliação `core.trips` = `raw` por competência.
@@ -174,10 +183,9 @@ uv run --env-file .env nyc-mobility db check
 
 ## Limitações conhecidas
 
-- **Horário de verão:** a TLC publica horário local sem fuso; na volta do horário de verão,
-  01:00–01:59 ocorre duas vezes e a conversão para UTC escolhe sempre a mesma ocorrência. O
-  `ARCHITECTURE.md` (4.7) pede tratamento explícito antes de processar esses dias (março e
-  novembro); validado apenas para jan–fev/2025.
+- **Horário de verão:** corridas ambíguas em que as duas ocorrências são igualmente plausíveis
+  (ambos os horários na hora repetida) são resolvidas por regra fixa (primeira ocorrência), sem
+  como confirmar pela origem; ficam identificadas em `local_time_issue = 'ambiguous'`.
 - Cada ingestão baixa o arquivo novamente para calcular o hash, mesmo que resulte em `skipped`.
 - Erros de contrato também passam pelos retries da DAG (download repetido, sem efeito colateral).
 - Recusas por concorrência (lock ocupado) não são registradas em `metadata.ingestion_runs`.
@@ -191,5 +199,3 @@ uv run --env-file .env nyc-mobility db check
 
 - **Processamento incremental em dbt** (o item 4.5 previa tabelas reconstruídas no MVP):
   adotado por decisão do projeto, por competência e guiado por `source_version`.
-- **Horário de verão** aceito como limitação documentada (ver acima), em vez do tratamento
-  explícito previsto no item 4.7.

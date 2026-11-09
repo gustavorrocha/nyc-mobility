@@ -37,11 +37,19 @@ def engine():
         yield sa.create_engine(database_url(), poolclass=sa.pool.NullPool)
 
 
-def _yellow_parquet(path, period, rows=5, pu_location=1, drop_columns=()):
-    """Parquet mínimo no formato Yellow 2025; a 1ª corrida termina antes de começar."""
-    start = datetime.fromisoformat(f"{period}-01T10:00:00")
-    pickups = [start + timedelta(hours=i) for i in range(rows)]
-    dropoffs = [p + timedelta(minutes=-5 if i == 0 else 15) for i, p in enumerate(pickups)]
+def _yellow_parquet(path, period, rows=5, pu_location=1, drop_columns=(), times=None):
+    """Parquet mínimo no formato Yellow 2025; a 1ª corrida termina antes de começar.
+
+    `times`: lista de (embarque, desembarque) em ISO local, substituindo as corridas padrão.
+    """
+    if times:
+        rows = len(times)
+        pickups = [datetime.fromisoformat(p) for p, _ in times]
+        dropoffs = [datetime.fromisoformat(d) for _, d in times]
+    else:
+        start = datetime.fromisoformat(f"{period}-01T10:00:00")
+        pickups = [start + timedelta(hours=i) for i in range(rows)]
+        dropoffs = [p + timedelta(minutes=-5 if i == 0 else 15) for i, p in enumerate(pickups)]
     columns = {
         "VendorID": pa.array([1] * rows, pa.int32()),
         "tpep_pickup_datetime": pa.array(pickups, pa.timestamp("us")),
