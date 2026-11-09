@@ -76,8 +76,17 @@ uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
 | `analytics.trip_demand_hourly` | hora × modalidade × zona de embarque | Apenas corridas válidas |
 | `analytics.trip_weather_hourly` | hora `[hour_utc, +1h)` | Viagens válidas e clima da hora, inclusive horas sem corrida; instantâneas no início da hora, acumulados da observação seguinte (`NULL` na última hora sem a competência seguinte) |
 
-- Modelos materializados como tabelas e reconstruídos a cada `dbt build`; testes garantem que
-  `core.trips` concilia com `raw` por competência.
+- **Incremental por competência** nos modelos transacionais (`core.trips`,
+  `core.weather_hourly`, `analytics.*`); cadastros (`zones`, `service_types`) são reconstruídos
+  inteiros. Cada linha guarda em `source_version` a versão dos insumos da sua competência
+  (arquivo publicado em `metadata.ingestion_runs`, cadastro de zonas e, no viagens x clima, o
+  clima do mês seguinte). Um `dbt build` reprocessa (delete+insert por `period`) só as
+  competências cuja versão mudou: mês republicado → só ele; nova versão de zonas → todas as
+  viagens; clima do mês seguinte → o viagens x clima do mês anterior.
+- `dbt build --full-refresh` reconstrói tudo (necessário após mudar a estrutura de um modelo).
+- Desvio registrado do `ARCHITECTURE.md` (item 5.3 previa tabelas reconstruídas no MVP):
+  incremental adotado por decisão do projeto. Os testes dbt ainda varrem as tabelas inteiras.
+- Testes garantem que `core.trips` concilia com `raw` por competência.
 - Limitação aceita: na volta do horário de verão, 01:00–01:59 local ocorre duas vezes e a TLC
   não informa o fuso; a conversão para UTC escolhe sempre a mesma ocorrência.
 

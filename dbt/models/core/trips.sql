@@ -1,11 +1,25 @@
+{{ config(
+    materialized='incremental',
+    incremental_strategy='delete+insert',
+    unique_key='period',
+    indexes=[{'columns': ['period', 'source_version']}],
+) }}
+
 -- Uma linha por corrida de raw: nada é excluído. Corridas inválidas ficam com is_valid = false
 -- e o primeiro motivo encontrado em invalid_reason; o analytics usa apenas as válidas.
-with yellow as (
+-- Incremental: só competências cuja versão (arquivo yellow + cadastro de zonas) mudou.
+with periods as (
+    {{ incremental_periods('trips_version') }}
+),
+
+yellow as (
     select
         t.*,
+        p.source_version,
         to_date(t.period, 'YYYY-MM')::timestamp as period_start,
         to_date(t.period, 'YYYY-MM')::timestamp + interval '1 month' as period_end
     from {{ source('raw', 'tlc_yellow_trips') }} as t
+    inner join periods as p on p.period = t.period
 ),
 
 zones as (
@@ -42,7 +56,8 @@ trips as (
             when not (y.tpep_pickup_datetime >= y.period_start
                 and y.tpep_pickup_datetime < y.period_end) then 'pickup_outside_period'
             when pu.zone_id is null or dz.zone_id is null then 'unknown_zone'
-        end as invalid_reason
+        end as invalid_reason,
+        y.source_version
     from yellow as y
     left join zones as pu on pu.zone_id = y.pulocationid
     left join zones as dz on dz.zone_id = y.dolocationid

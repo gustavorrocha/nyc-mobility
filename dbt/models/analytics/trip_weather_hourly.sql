@@ -1,18 +1,25 @@
+{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='period') }}
+
 -- Uma linha por hora [hour_utc, hour_utc + 1h) das competências com viagens e clima carregados.
 -- Instantâneas vêm da observação em hour_utc; acumulados vêm da observação seguinte, que cobre
--- exatamente essa hora (fica NULL na última hora se a competência seguinte não estiver carregada).
-with weather as (
+-- exatamente essa hora (NULL na última hora enquanto a competência seguinte não for carregada;
+-- carregá-la muda a versão e reprocessa esta competência).
+with periods as (
+    {{ incremental_periods('trip_weather_version') }}
+),
+
+weather as (
     select * from {{ ref('weather_hourly') }}
 ),
 
 demand as (
     select
-        date_trunc('hour', pickup_at_utc) as hour_utc,
-        count(*) as trip_count,
-        avg(duration_seconds) / 60.0 as avg_duration_min,
-        avg(trip_distance_miles) as avg_distance_miles
-    from {{ ref('trips') }}
-    where is_valid
+        hour_utc,
+        sum(trip_count) as trip_count,
+        sum(avg_duration_min * trip_count) / sum(trip_count) as avg_duration_min,
+        sum(avg_distance_miles * trip_count) / sum(trip_count) as avg_distance_miles
+    from {{ ref('trip_demand_hourly') }}
+    where period in (select period from periods)
     group by 1
 )
 
@@ -29,8 +36,9 @@ select
     w.weather_code,
     nxt.precipitation_mm,
     nxt.rain_mm,
-    nxt.snowfall_cm
+    nxt.snowfall_cm,
+    p.source_version
 from weather as w
+inner join periods as p on p.period = w.period
 left join weather as nxt on nxt.observed_at_utc = w.observed_at_utc + interval '1 hour'
 left join demand as d on d.hour_utc = w.observed_at_utc
-where w.period in (select distinct period from {{ ref('trips') }})
