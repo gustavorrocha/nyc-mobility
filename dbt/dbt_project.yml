@@ -8,6 +8,15 @@ seed-paths: ["seeds"]
 test-paths: ["tests"]
 macro-paths: ["macros"]
 
+# Faixas plausíveis das métricas por corrida (core.trips.metric_issue). Fora delas, a corrida
+# conta na demanda mas não entra nas médias. Mudou um limite: dbt build --full-refresh.
+vars:
+  metric_min_duration_minutes: 1
+  metric_max_duration_minutes: 180
+  metric_max_distance_miles: 100
+  metric_max_speed_mph: 80
+  metric_max_total_amount: 1000
+
 # MVP: tabelas reconstruídas a cada `dbt build`, sem lógica incremental.
 models:
   nyc_mobility:

@@ -7,7 +7,7 @@ embarque). As médias de distância e duração são ponderadas pelo número de 
 import math
 from datetime import date, timedelta
 
-from dash import Input, Output, State, callback, dcc, html, no_update
+from dash import Input, Output, State, callback, html, no_update
 
 from dashboard import theme
 from dashboard.db import query
@@ -47,13 +47,16 @@ def days_in(p: dict) -> list[date]:
 
 
 def load_kpis(p: dict) -> dict:
+    """Totais e médias; as médias usam só corridas com métricas plausíveis (measured)."""
     return query(
         f"""SELECT sum(d.trip_count)::bigint AS trips,
-                   sum(d.avg_distance_miles * d.trip_count) / sum(d.trip_count) AS distance_mi,
-                   (sum(d.avg_duration_min * d.trip_count) / sum(d.trip_count))::float8
-                       AS duration_min,
-                   sum(d.total_amount) / sum(d.trip_count) AS amount_per_trip,
-                   sum(d.total_amount) AS amount
+                   sum(d.measured_trip_count)::bigint AS measured,
+                   sum(d.duration_min_sum) / nullif(sum(d.measured_trip_count), 0) AS duration_min,
+                   sum(d.distance_miles_sum) / nullif(sum(d.measured_trip_count), 0)
+                       AS distance_mi,
+                   sum(d.distance_miles_sum) / nullif(sum(d.duration_min_sum) / 60, 0)
+                       AS speed_mph,
+                   sum(d.amount_sum) / nullif(sum(d.measured_trip_count), 0) AS amount_per_trip
             FROM {SOURCE} WHERE {WHERE}""",
         p,
     )[0]
@@ -114,24 +117,17 @@ def _money(value, decimals: int = 0) -> str:
 
 def kpi_tiles(k: dict, n_days: int) -> list:
     per_day = k["trips"] / n_days if k["trips"] and n_days else None
-    tiles = [
-        ("Corridas", theme.number(k["trips"]), f"{theme.number(per_day)} por dia"),
-        ("Distância média", f"{theme.number(k['distance_mi'], 2)} mi", "por corrida"),
-        ("Duração média", f"{theme.number(k['duration_min'], 1)} min", "por corrida"),
-        ("Valor médio", _money(k["amount_per_trip"], 2), "total pago por corrida"),
-        ("Faturamento", _money(k["amount"]), "total_amount no período"),
-    ]
-    return [
-        html.Div(
-            [
-                html.Div(label, className="kpi-label"),
-                html.Div(value, className="kpi-value"),
-                html.Div(note, className="kpi-note"),
-            ],
-            className="kpi card",
-        )
-        for label, value, note in tiles
-    ]
+    coverage = k["measured"] / k["trips"] if k["trips"] else None
+    base = f"base: {theme.number(100 * coverage, 1)}% das corridas" if coverage else "por corrida"
+    return theme.kpi_cards(
+        [
+            ("Corridas", theme.number(k["trips"]), f"{theme.number(per_day)} por dia"),
+            ("Duração média", f"{theme.number(k['duration_min'], 1)} min", base),
+            ("Distância média", f"{theme.number(k['distance_mi'], 2)} mi", "por corrida"),
+            ("Velocidade média", f"{theme.number(k['speed_mph'], 1)} mph", "distância / tempo"),
+            ("Valor médio", _money(k["amount_per_trip"], 2), "tarifa, gorjeta e taxas"),
+        ]
+    )
 
 
 def trend_figure(rows: list[dict], grain: str):
@@ -252,51 +248,32 @@ def map_figure(rows: list[dict], selected: list[int] | None):
 # --- Página ------------------------------------------------------------------------------
 
 
-def _chart(title: str, graph_id: str, note: str, height: int, wide: bool = False):
-    return html.Div(
-        [
-            html.H3(title),
-            html.P(note, className="chart-note"),
-            dcc.Loading(
-                dcc.Graph(
-                    id=graph_id,
-                    config={"displayModeBar": False, "responsive": True},
-                    style={"height": f"{height}px"},
-                ),
-                type="dot",
-                color=theme.BLUE,
-            ),
-        ],
-        className="card chart" + (" wide" if wide else ""),
-    )
-
-
 def layout() -> list:
     return [
         html.Div(id="m-kpis", className="kpis"),
         html.Div(
             className="charts",
             children=[
-                _chart(
+                theme.chart_card(
                     "Demanda ao longo do tempo",
                     "m-trend",
                     f"Corridas por hora (até {HOURLY_MAX_DAYS} dias) ou por dia.",
                     300,
                     wide=True,
                 ),
-                _chart(
+                theme.chart_card(
                     "Mapa das zonas de embarque",
                     "m-map",
                     "Corridas por Taxi Zone (escala log). Clique numa zona para filtrar.",
                     480,
                 ),
-                _chart(
+                theme.chart_card(
                     f"Top {TOP_ZONES} zonas de embarque",
                     "m-ranking",
                     "Corridas e participação no total filtrado.",
                     480,
                 ),
-                _chart(
+                theme.chart_card(
                     "Horário e dia da semana",
                     "m-heatmap",
                     "Média de corridas por dia, em cada hora local de embarque.",

@@ -2,11 +2,16 @@ version: 2
 
 models:
   - name: trip_demand_hourly
-    description: Corridas válidas por hora de embarque (UTC), modalidade e zona de embarque.
+    description: >
+      Corridas válidas por hora de embarque (UTC), modalidade e zona de embarque. Métricas em
+      somas e contagem das corridas sem metric_issue (médias = soma / measured_trip_count).
     columns:
       - name: hour_utc
         data_tests: [not_null]
       - name: trip_count
+        data_tests: [not_null]
+      - name: measured_trip_count
+        description: Corridas da linha com métricas plausíveis (base das médias).
         data_tests: [not_null]
 
   - name: trip_weather_hourly

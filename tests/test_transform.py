@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from test_weather_zones import weather_json, zones_csv
 
-from dashboard import mobility
+from dashboard import climate, mobility
 from nyc_mobility.ingest import ingest
 
 DBT_DIR = Path(__file__).parents[1] / "dbt"
@@ -68,7 +68,8 @@ def test_dbt_build_core_and_analytics(engine, landing, yellow_parquet, tmp_path,
     # Fixture: corridas válidas às 11h, 12h, 13h e 14h locais de 01/02 (UTC-5), 15 min cada.
     assert rows(
         engine,
-        "SELECT sum(trip_count), min(hour_utc AT TIME ZONE 'UTC')::text, avg(avg_duration_min) "
+        "SELECT sum(trip_count), min(hour_utc AT TIME ZONE 'UTC')::text, "
+        "sum(duration_min_sum) / sum(measured_trip_count) "
         "FROM analytics.trip_demand_hourly WHERE hour_local >= '2024-02-01' "
         "AND hour_local < '2024-04-01'",
     ) == [(4, "2024-02-01 16:00:00", 15)]
@@ -79,6 +80,14 @@ def test_dbt_build_core_and_analytics(engine, landing, yellow_parquet, tmp_path,
         "count(*) FILTER (WHERE precipitation_mm IS NULL) FROM analytics.trip_weather_hourly "
         "WHERE period IN ('2024-02', '2024-03') GROUP BY 1",
     ) == [("2024-02", 696, 4, 692, 1)]
+    # Médias por hora: 1,5 mi em 15 min (6 mph) e US$ 10 por corrida.
+    assert set(
+        rows(
+            engine,
+            "SELECT trip_count, avg_duration_min, avg_distance_miles, avg_speed_mph, avg_amount "
+            "FROM analytics.trip_weather_hourly WHERE period = '2024-02' AND trip_count > 0",
+        )
+    ) == {(1, 15.0, 1.5, 6.0, 10.0)}
     # Dashboard: dbt concede leitura só aos modelos liberados (+grants em dbt_project.yml).
     assert rows(
         engine,
@@ -104,10 +113,11 @@ def test_dashboard_mobility_queries(engine, monkeypatch):
     p = mobility.params("2024-02-01", "2024-02-01", None, None, ["yellow"])
     assert mobility.load_kpis(p) == {
         "trips": 4,
-        "distance_mi": 1.5,
+        "measured": 4,
         "duration_min": 15.0,
+        "distance_mi": 1.5,
+        "speed_mph": 6.0,
         "amount_per_trip": 10.0,
-        "amount": 40.0,
     }
     trend = mobility.load_trend(p, "hour")
     assert len(trend) == 24
@@ -128,6 +138,11 @@ def test_dashboard_mobility_queries(engine, monkeypatch):
     expected = [{"zone_id": 1, "zone": "A", "borough": "EWR", "trips": 4}]
     assert mobility.load_zone_trips({**p, "zones": [2]}) == expected
     assert mobility.load_zone_trips({**p, "borough": "Q"}) == []
+    # Clima: todas as horas do mês com clima; corridas filtradas, zero nas demais.
+    month = mobility.params("2024-02-01", "2024-02-29", None, None, ["yellow"])
+    hours = climate.load_hours(month)
+    assert len(hours) == 696 and sum(h["trips"] for h in hours) == 4
+    assert sum(h["trips"] for h in climate.load_hours({**month, "borough": "Q"})) == 0
 
 
 def test_dbt_incremental_reprocesses_only_changed_periods(
@@ -220,3 +235,41 @@ def test_dst_local_times_are_flagged_and_resolved(engine, landing, yellow_parque
         (1, "nonexistent", None, None, "nonexistent_local_time"),
         (2, None, "06:50", 20, None),
     ]
+
+
+def test_implausible_metrics_count_as_demand_but_not_in_averages(
+    engine, landing, yellow_parquet, tmp_path
+):
+    """2024-06: uma corrida normal e uma por regra de metric_issue (limites do dbt_project.yml)."""
+    times = [
+        ("2024-06-03T08:00:00", "2024-06-03T08:20:00"),  # normal: 2 mi, 20 min, US$ 20
+        ("2024-06-03T08:05:00", "2024-06-03T08:05:30"),  # 30 s
+        ("2024-06-03T08:10:00", "2024-06-03T08:30:00"),  # distância zero
+        ("2024-06-03T08:15:00", "2024-06-03T08:25:00"),  # 90 mi em 10 min (540 mph)
+        ("2024-06-03T08:20:00", "2024-06-03T08:40:00"),  # estorno (valor negativo)
+    ]
+    url = yellow_parquet(
+        tmp_path / "m" / "y.parquet",
+        "2024-06",
+        times=times,
+        distances=[2.0, 1.0, 0.0, 90.0, 2.0],
+        amounts=[20.0, 8.0, 5.0, 300.0, -20.0],
+    )
+    ingest("tlc.yellow", "2024-06", url=url)
+    dbt_build()
+
+    assert rows(
+        engine,
+        "SELECT metric_issue FROM core.trips WHERE period = '2024-06' ORDER BY source_row_number",
+    ) == [
+        (None,),
+        ("implausible_duration",),
+        ("implausible_distance",),
+        ("implausible_speed",),
+        ("implausible_amount",),
+    ]
+    assert rows(
+        engine,
+        "SELECT trip_count, measured_trip_count, duration_min_sum, distance_miles_sum, amount_sum "
+        "FROM analytics.trip_demand_hourly WHERE period = '2024-06'",
+    ) == [(5, 1, 20.0, 2.0, 20.0)]

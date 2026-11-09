@@ -37,10 +37,13 @@ def engine():
         yield sa.create_engine(database_url(), poolclass=sa.pool.NullPool)
 
 
-def _yellow_parquet(path, period, rows=5, pu_location=1, drop_columns=(), times=None):
+def _yellow_parquet(
+    path, period, rows=5, pu_location=1, drop_columns=(), times=None, distances=None, amounts=None
+):
     """Parquet mínimo no formato Yellow 2025; a 1ª corrida termina antes de começar.
 
     `times`: lista de (embarque, desembarque) em ISO local, substituindo as corridas padrão.
+    `distances` / `amounts`: valores por corrida (padrão: 1,5 mi e US$ 10).
     """
     if times:
         rows = len(times)
@@ -55,11 +58,11 @@ def _yellow_parquet(path, period, rows=5, pu_location=1, drop_columns=(), times=
         "tpep_pickup_datetime": pa.array(pickups, pa.timestamp("us")),
         "tpep_dropoff_datetime": pa.array(dropoffs, pa.timestamp("us")),
         "passenger_count": pa.array([1] * (rows - 1) + [None], pa.int64()),
-        "trip_distance": pa.array([1.5] * rows, pa.float64()),
+        "trip_distance": pa.array(distances or [1.5] * rows, pa.float64()),
         "store_and_fwd_flag": pa.array(["N"] * rows, pa.large_string()),
         "PULocationID": pa.array([pu_location] * rows, pa.int64()),
         "DOLocationID": pa.array([2] * rows, pa.int32()),
-        "total_amount": pa.array([10.0] * rows, pa.float64()),
+        "total_amount": pa.array(amounts or [10.0] * rows, pa.float64()),
         "Airport_fee": pa.array([0.0] * rows, pa.float64()),
     }
     for name in drop_columns:

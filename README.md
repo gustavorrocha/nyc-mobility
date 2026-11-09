@@ -71,10 +71,10 @@ uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
 |---|---|---|
 | `core.zones` | zona | Cadastro TLC; strings vazias viram `NULL` |
 | `core.service_types` | modalidade | Seed; no MVP, apenas `yellow` |
-| `core.trips` | corrida | Uma linha por registro de `raw` (nada é excluído); `is_valid` e `invalid_reason` (`missing_required_value`, `dropoff_before_pickup`, `negative_distance`, `pickup_outside_period`, `unknown_zone`); horários locais originais e em UTC |
+| `core.trips` | corrida | Uma linha por registro de `raw` (nada é excluído); `is_valid` e `invalid_reason` (`missing_required_value`, `dropoff_before_pickup`, `negative_distance`, `pickup_outside_period`, `unknown_zone`); horários locais originais e em UTC; `metric_issue` marca corridas válidas com duração, distância, velocidade ou valor fora das faixas plausíveis (vars `metric_*` em `dbt_project.yml`): contam na demanda, mas ficam fora das médias |
 | `core.weather_hourly` | hora UTC | Semântica da fonte: acumulados referem-se à hora anterior a `observed_at_utc` |
-| `analytics.trip_demand_hourly` | hora × modalidade × zona de embarque | Apenas corridas válidas |
-| `analytics.trip_weather_hourly` | hora `[hour_utc, +1h)` | Viagens válidas e clima da hora, inclusive horas sem corrida; instantâneas no início da hora, acumulados da observação seguinte (`NULL` na última hora sem a competência seguinte) |
+| `analytics.trip_demand_hourly` | hora × modalidade × zona de embarque | Apenas corridas válidas; métricas em somas (`duration_min_sum`, `distance_miles_sum`, `amount_sum`) e `measured_trip_count` (corridas sem `metric_issue`), somáveis em qualquer recorte: média = soma / `measured_trip_count` |
+| `analytics.trip_weather_hourly` | hora `[hour_utc, +1h)` | Viagens válidas e clima da hora, inclusive horas sem corrida; médias de duração, distância, velocidade (`avg_speed_mph`) e valor (`avg_amount`) só das corridas sem `metric_issue`; instantâneas no início da hora, acumulados da observação seguinte (`NULL` na última hora sem a competência seguinte) |
 
 - **Incremental por competência** nos modelos transacionais (`core.trips`,
   `core.weather_hourly`, `analytics.*`); cadastros (`zones`, `service_types`) são reconstruídos
@@ -83,7 +83,8 @@ uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
   clima do mês seguinte). Um `dbt build` reprocessa (delete+insert por `period`) só as
   competências cuja versão mudou: mês republicado → só ele; nova versão de zonas → todas as
   viagens; clima do mês seguinte → o viagens x clima do mês anterior.
-- `dbt build --full-refresh` reconstrói tudo (necessário após mudar a estrutura de um modelo).
+- `dbt build --full-refresh` reconstrói tudo (necessário após mudar a estrutura de um modelo ou
+  um limite `metric_*`).
 - Desvio registrado do `ARCHITECTURE.md` (item 5.3 previa tabelas reconstruídas no MVP):
   incremental adotado por decisão do projeto. Os testes dbt ainda varrem as tabelas inteiras.
 - Testes garantem que `core.trips` concilia com `raw` por competência.

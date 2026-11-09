@@ -23,20 +23,24 @@ def test_params_make_end_exclusive_and_empty_zones_mean_all():
 def test_kpi_tiles_format_pt_br_and_handle_no_data():
     k = {
         "trips": 7052499,
-        "distance_mi": 5.9415,
-        "duration_min": 15.22,
-        "amount_per_trip": 25.3167,
-        "amount": 178545872.95,
+        "measured": 6724130,
+        "duration_min": 14.62,
+        "distance_mi": 3.0712,
+        "speed_mph": 12.61,
+        "amount_per_trip": 26.0512,
     }
-    values = [tile.children[1].children for tile in mobility.kpi_tiles(k, 59)]
-    assert values == ["7.052.499", "5,94 mi", "15,2 min", "US$ 25,32", "US$ 178.545.873"]
-    assert mobility.kpi_tiles(k, 59)[0].children[2].children == "119.534 por dia"
-    empty = dict.fromkeys(k)
-    assert {t.children[1].children for t in mobility.kpi_tiles(empty, 59)} == {
-        "—",
-        "— mi",
-        "— min",
-    }
+    tiles = mobility.kpi_tiles(k, 59)
+    assert [t.children[1].children for t in tiles] == [
+        "7.052.499",
+        "14,6 min",
+        "3,07 mi",
+        "12,6 mph",
+        "US$ 26,05",
+    ]
+    assert tiles[0].children[2].children == "119.534 por dia"
+    assert tiles[1].children[2].children == "base: 95,3% das corridas"
+    empty = mobility.kpi_tiles(dict.fromkeys(k), 59)
+    assert [t.children[1].children for t in empty] == ["—", "— min", "— mi", "— mph", "—"]
 
 
 def test_heatmap_averages_by_weekday_occurrences():

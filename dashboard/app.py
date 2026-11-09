@@ -3,7 +3,7 @@
 import psycopg
 from dash import Dash, Input, Output, State, dcc, html
 
-from dashboard import mobility
+from dashboard import climate, mobility
 from dashboard.db import query
 
 
@@ -22,8 +22,9 @@ PAGES = {
     ),
     "/clima": (
         "Mobilidade e clima",
-        "Precipitação, temperatura e demanda por horário e dia da semana.",
-        _planned(4),
+        "Como chuva, neve e temperatura mudam demanda, duração, distância, velocidade e "
+        "valor das corridas.",
+        climate.layout,
     ),
     "/pipeline": (
         "Pipeline Health",

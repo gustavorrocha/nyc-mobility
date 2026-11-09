@@ -105,3 +105,8 @@ body { margin: 0; }
 @media (max-width: 960px) {
   .charts { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Página 2: cartões com efeito de chuva e neve por métrica */
+.effect-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px; }
+.effect-label { color: var(--muted); font-size: 0.85rem; }
+.effect-value { font-size: 1.35rem; font-weight: 650; font-variant-numeric: tabular-nums; }
