@@ -30,6 +30,16 @@ x-airflow-common: &airflow-common
       condition: service_healthy
 
 services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+
   postgres:
     image: postgres:17
     environment:
@@ -128,3 +138,4 @@ services:
 
 volumes:
   postgres-data:
+  prometheus-data:

@@ -31,6 +31,22 @@ do Airflow (`airflow-init`) e do projeto (`migrate`) e inicia o Airflow 3.4 com 
 - UI do Airflow: <http://127.0.0.1:8080> (sem login; somente para desenvolvimento local).
 - PostgreSQL: `127.0.0.1:5432` (porta configurável por `POSTGRES_HOST_PORT`).
 
+## Observabilidade: primeiro contato com Prometheus
+
+```bash
+docker compose --profile observability up -d prometheus
+```
+
+Acesse <http://127.0.0.1:9090> e consulte `up{job="prometheus"}`. O valor `1`
+indica que a última coleta do próprio Prometheus teve sucesso. Em **Status → Target
+health**, confira o alvo `prometheus` e seu estado. O arquivo
+[`observability/prometheus.yml`](observability/prometheus.yml) configura uma coleta a
+cada 15 segundos; o volume `prometheus-data` preserva o histórico entre reinícios.
+
+Neste primeiro passo o Prometheus monitora apenas a si mesmo: `up` não representa
+a saúde da ingestão. Nos próximos passos adicionaremos as métricas do pipeline,
+o Grafana e um alerta. Para parar o serviço: `docker compose stop prometheus`.
+
 ## Comandos de validação
 
 ```bash
