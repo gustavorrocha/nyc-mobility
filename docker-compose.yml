@@ -30,6 +30,21 @@ x-airflow-common: &airflow-common
       condition: service_healthy
 
 services:
+  grafana:
+    image: grafana/grafana:12.4.0
+    profiles: ["observability"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v3.5.0
     profiles: ["observability"]
@@ -158,3 +173,4 @@ services:
 volumes:
   postgres-data:
   prometheus-data:
+  grafana-data:

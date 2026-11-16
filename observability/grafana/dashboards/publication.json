@@ -1,0 +1,22 @@
+{
+  "uid": "nyc-publication",
+  "title": "NYC Mobility - Publicação",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {"from": "now-24h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "title": "Horas desde a última publicação validada",
+      "description": "Idade da publicação no dashboard; não indica disponibilidade de novos arquivos na TLC.",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "(time() - nyc_mobility_publication_timestamp_seconds) / 3600", "instant": true}
+      ],
+      "fieldConfig": {"defaults": {"unit": "h", "decimals": 1, "noValue": "Sem dados"}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    }
+  ]
+}

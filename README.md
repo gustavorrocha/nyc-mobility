@@ -63,6 +63,19 @@ Sem publicação, não há amostra da métrica; erro no banco faz a coleta falha
 inventar um valor. Essa métrica não indica se a TLC publicou novos arquivos ou se a ingestão
 falhou. Para parar os dois serviços: `docker compose stop prometheus metrics-exporter`.
 
+### Painel no Grafana
+
+```bash
+docker compose --profile observability up -d grafana
+```
+
+Abra <http://127.0.0.1:3000/d/nyc-publication> para ver as horas desde a última
+publicação. O Grafana consulta o Prometheus pela rede do Compose; a fonte de dados e o
+painel são criados a partir dos arquivos versionados em `observability/grafana/`.
+O painel usa a mesma expressão PromQL mostrada acima e mostra “Sem dados” quando não
+há amostra. A visualização anônima é apenas para desenvolvimento local, na porta 3000
+restrita ao computador. Para parar o Grafana: `docker compose stop grafana`.
+
 ## Comandos de validação
 
 ```bash
