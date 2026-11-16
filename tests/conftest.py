@@ -81,3 +81,62 @@ def landing(tmp_path, monkeypatch):
 @pytest.fixture
 def yellow_parquet():
     return _yellow_parquet
+
+
+def _tlc_parquet(path, dataset, period, rows=3, pu_location=1, do_location=2):
+    """Parquet mínimo de green, fhv ou fhvhv (formato 2025): corridas de 15 min a partir das 10h
+    locais do dia 1º. `pu_location`: valor único ou lista por corrida (None = zona ausente)."""
+    start = datetime.fromisoformat(f"{period}-01T10:00:00")
+    pickups = [start + timedelta(hours=i) for i in range(rows)]
+    times = {
+        "pickup": pa.array(pickups, pa.timestamp("us")),
+        "dropoff": pa.array([p + timedelta(minutes=15) for p in pickups], pa.timestamp("us")),
+    }
+    pu = pu_location if isinstance(pu_location, list) else [pu_location] * rows
+    do = [do_location] * rows
+
+    def const(value, kind=None):
+        return pa.array([value] * rows, kind or pa.float64())
+
+    if dataset == "green":
+        columns = {
+            "lpep_pickup_datetime": times["pickup"],
+            "lpep_dropoff_datetime": times["dropoff"],
+            "PULocationID": pa.array(pu, pa.int32()),
+            "DOLocationID": pa.array(do, pa.int32()),
+            "trip_distance": const(2.0),
+            "total_amount": const(12.0),
+            "trip_type": const(1, pa.int64()),
+        }
+    elif dataset == "fhv":
+        columns = {
+            "dispatching_base_num": const("B00001", pa.large_string()),
+            "pickup_datetime": times["pickup"],
+            "dropOff_datetime": times["dropoff"],
+            "PUlocationID": pa.array(pu, pa.int64()),
+            "DOlocationID": pa.array(do, pa.int64()),
+        }
+    else:  # fhvhv: 3 mi em 15 min; valor pago = 20 + 0,5 + 1,5 + 2,75 + 3 = 27,75
+        columns = {
+            "hvfhs_license_num": const("HV0003", pa.large_string()),
+            "pickup_datetime": times["pickup"],
+            "dropoff_datetime": times["dropoff"],
+            "PULocationID": pa.array(pu, pa.int32()),
+            "DOLocationID": pa.array(do, pa.int32()),
+            "trip_miles": const(3.0),
+            "trip_time": const(900, pa.int64()),
+            "base_passenger_fare": const(20.0),
+            "bcf": const(0.5),
+            "sales_tax": const(1.5),
+            "congestion_surcharge": const(2.75),
+            "tips": const(3.0),
+            "driver_pay": const(15.0),
+        }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.table(columns), path)
+    return path.as_uri()
+
+
+@pytest.fixture
+def tlc_parquet():
+    return _tlc_parquet

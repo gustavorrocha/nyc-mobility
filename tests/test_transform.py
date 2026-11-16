@@ -416,3 +416,40 @@ def test_dashboard_http_callbacks_use_coverage_and_build_history(engine, monkeyp
         else:
             prefix = component[0]
             assert f"{prefix}-coverage" in payload
+
+
+def test_other_trip_types_reach_core_and_analytics(
+    engine, landing, tlc_parquet, yellow_parquet, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("POSTGRES_DB", engine.url.database)
+    monkeypatch.setenv("DASHBOARD_DB_USER", engine.url.username)
+    monkeypatch.setenv("DASHBOARD_DB_PASSWORD", engine.url.password)
+    for dataset, pu in (("green", 1), ("fhv", [1, None]), ("fhvhv", 2)):
+        url = tlc_parquet(
+            tmp_path / dataset / "t.parquet", dataset, "2024-08", rows=2, pu_location=pu
+        )
+        ingest(f"tlc.{dataset}", "2024-08", url=url)
+    ingest(
+        "tlc.yellow", "2024-08", url=yellow_parquet(tmp_path / "yellow.parquet", "2024-08", rows=3)
+    )
+    # Setembro tem somente Yellow, com uma corrida inválida (demanda zero, carga disponível).
+    ingest(
+        "tlc.yellow",
+        "2024-09",
+        url=yellow_parquet(tmp_path / "september.parquet", "2024-09", rows=1),
+    )
+    dbt_build()
+
+    assert rows(
+        engine,
+        "SELECT service_type, pickup_zone_id, is_valid, metric_issue, trip_distance_miles, "
+        "total_amount FROM core.trips WHERE period = '2024-08' AND service_type != 'yellow' "
+        "ORDER BY service_type, source_row_number",
+    ) == [
+        ("fhv", 1, True, "metric_unavailable", None, None),
+        ("fhv", None, True, "metric_unavailable", None, None),
+        ("fhvhv", 2, True, None, 3.0, 27.75),
+        ("fhvhv", 2, True, None, 3.0, 27.75),
+        ("green", 1, True, None, 2.0, 12.0),
+        ("green", 1, True, None, 2.0, 12.0),
+    ]

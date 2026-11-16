@@ -1,2 +1,5 @@
 service_type,description
 yellow,Yellow Taxi (táxis amarelos com taxímetro)
+green,Green Taxi (táxis verdes; embarques fora do centro de Manhattan)
+fhv,FHV (carros de aluguel de bases tradicionais e limusines)
+fhvhv,HVFHV (aplicativos de alto volume; ex.: Uber e Lyft)

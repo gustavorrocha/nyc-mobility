@@ -60,7 +60,8 @@ jobs:
           b = DagBag('/opt/airflow/dags')
           assert not b.import_errors, b.import_errors
           d = b.dags['monthly_pipeline']
-          ingest = {'tlc_taxi_zones', 'tlc_yellow', 'openmeteo_era5'}
+          ingest = {'tlc_taxi_zones', 'tlc_yellow', 'tlc_green', 'tlc_fhv', 'tlc_fhvhv',
+                    'openmeteo_era5'}
           up = {t.task_id: t.upstream_task_ids for t in d.tasks}
           assert set(up) == ingest | {'dbt_build', 'summary'}, up
           assert all(not up[t] for t in ingest), up

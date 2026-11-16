@@ -70,7 +70,7 @@ uv run --env-file .env nyc-mobility build
 | Modelo | Grão | Observações |
 |---|---|---|
 | `core.zones` | zona | Cadastro TLC; strings vazias viram `NULL` |
-| `core.service_types` | modalidade | Seed; no MVP, apenas `yellow` |
+| `core.service_types` | modalidade | Seed: `yellow`, `green`, `fhv` e `fhvhv` |
 | `core.trips` | corrida | Uma linha por registro de `raw` (nada é excluído); `is_valid` e `invalid_reason` (`missing_required_value`, `dropoff_before_pickup`, `negative_distance`, `pickup_outside_period`, `unknown_zone`); horários locais originais e em UTC; `metric_issue` marca corridas válidas com duração, distância, velocidade ou valor fora das faixas plausíveis (vars `metric_*` em `dbt_project.yml`): contam na demanda, mas ficam fora das médias |
 | `core.weather_hourly` | hora UTC | Semântica da fonte: acumulados referem-se à hora anterior a `observed_at_utc` |
 | `analytics.trip_demand_hourly` | hora × modalidade × zona de embarque | Apenas corridas válidas; métricas em somas (`duration_min_sum`, `distance_miles_sum`, `amount_sum`) e `measured_trip_count` (corridas sem `metric_issue`), somáveis em qualquer recorte: média = soma / `measured_trip_count` |
@@ -120,6 +120,9 @@ docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.taxi_zon
 | Dataset | Tabela raw | Observações |
 |---|---|---|
 | `tlc.yellow` | `raw.tlc_yellow_trips` | Timestamps locais de NY, sem fuso, como publicados |
+| `tlc.green` | `raw.tlc_green_trips` | Táxis verdes, com os horários `lpep_*` |
+| `tlc.fhv` | `raw.tlc_fhv_trips` | Bases tradicionais e limusines; zonas opcionais, sem distância nem valores |
+| `tlc.fhvhv` | `raw.tlc_fhvhv_trips` | Aplicativos de alto volume; distância e componentes do valor pago pelo passageiro |
 | `openmeteo.era5` | `raw.openmeteo_weather_hourly` | `time_unix` em UTC; mês local de NY (DST incluído); acumulados (`precipitation`, `rain`, `snowfall`) referem-se à hora anterior |
 | `tlc.taxi_zones` | `raw.tlc_taxi_zones` | Referência versionada: só recarrega quando o hash muda |
 
@@ -128,7 +131,13 @@ docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.taxi_zon
   canônico (sem `generationtime_ms`, que muda a cada chamada); o hash do arquivo bruto fica em
   `acquisition_params.file_sha256`.
 - Mesmo hash já publicado → execução registrada como `skipped`. Hash novo ou `--force` →
-  staging temporário e substituição da competência em `raw.tlc_yellow_trips` numa transação.
+  staging temporário e substituição da competência na tabela raw da modalidade numa transação.
+- As quatro modalidades usam contratos próprios em `src/nyc_mobility/tlc_trips.py`, com o
+  mesmo fluxo de ingestão. A DAG inclui Yellow, Green e FHV; HVFHV é opcional
+  (`include_hvfhv=true`, pelo volume). A migração `0005` já cria suas tabelas raw.
+- Em `core.trips`, campos não informados pela fonte permanecem `NULL`. FHV sem zona continua
+  na demanda total, fora do mapa/ranking; sem distância/valor, recebe `metric_unavailable` e
+  fica fora das médias. No HVFHV, valor = tarifa base + pedágios + taxas + gorjetas.
 - Cargas simultâneas da mesma fonte/competência são recusadas (advisory lock no PostgreSQL).
 - Execuções, contagens, registros sinalizados por motivo e erros ficam em
   `metadata.ingestion_runs`; arquivos e hashes em `metadata.source_files`.

@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 with DAG(
     dag_id="monthly_pipeline",
-    description="Ingestão (Taxi Zones, Yellow, Open-Meteo) e dbt build de uma competência",
+    description="Ingestão (Taxi Zones, viagens TLC, Open-Meteo) e dbt build de uma competência",
     schedule=None,
     start_date=datetime(2025, 1, 1),
     catchup=False,
@@ -30,7 +30,10 @@ with DAG(
     params={
         "period": Param(type="string", pattern=PERIOD_PATTERN, description="Competência AAAA-MM"),
         "force": Param(
-            False, type="boolean", description="Recarrega Yellow e clima mesmo sem hash novo"
+            False, type="boolean", description="Recarrega viagens e clima mesmo sem hash novo"
+        ),
+        "include_hvfhv": Param(
+            False, type="boolean", description="Inclui o HVFHV (aplicativos, ex.: Uber e Lyft)"
         ),
     },
     default_args={
@@ -43,9 +46,12 @@ with DAG(
 ) as dag:
 
     @task
-    def ingest(dataset: str, periodic: bool = True) -> dict:
+    def ingest(dataset: str, periodic: bool = True, enabled_by: str | None = None) -> dict:
         """Chama a CLI em processo próprio, com argumentos em lista (sem shell)."""
         params = get_current_context()["params"]
+        if enabled_by and not params[enabled_by]:
+            log.info("%s não solicitado (%s=false)", dataset, enabled_by)
+            return {"dataset": dataset, "status": "not_requested"}
         cmd = ["nyc-mobility", "ingest", "--dataset", dataset]
         if periodic:
             cmd += ["--period", params["period"]]
@@ -63,11 +69,17 @@ with DAG(
 
     # Referência versionada: sem competência e sem --force (forçar reprocessaria todas as viagens).
     zones = ingest.override(task_id="tlc_taxi_zones")("tlc.taxi_zones", periodic=False)
-    yellow = ingest.override(task_id="tlc_yellow")("tlc.yellow")
+    trips = [
+        ingest.override(task_id="tlc_yellow")("tlc.yellow"),
+        ingest.override(task_id="tlc_green")("tlc.green"),
+        ingest.override(task_id="tlc_fhv")("tlc.fhv"),
+        # HVFHV é opcional pelo volume no banco local (~20 mi de corridas/mês).
+        ingest.override(task_id="tlc_fhvhv")("tlc.fhvhv", enabled_by="include_hvfhv"),
+    ]
     weather = ingest.override(task_id="openmeteo_era5")("openmeteo.era5")
 
-    # Só roda com as três fontes concluídas (succeeded ou skipped). Sem retry: falhas de modelo
-    # ou de teste são determinísticas; reexecutar só o dbt = "Clear" nesta tarefa.
+    # Só roda com as fontes concluídas (succeeded, skipped ou not_requested). Falhas de modelo
+    # ou teste são determinísticas: sem retry; reexecutar só o dbt = "Clear" nesta tarefa.
     dbt_build = BashOperator(
         task_id="dbt_build",
         bash_command='nyc-mobility build --period "$NYC_PERIOD"',
@@ -84,4 +96,5 @@ with DAG(
         log.info("Resumo: %s", json.dumps(report, ensure_ascii=False))
         return report
 
-    [zones, yellow, weather] >> dbt_build >> summary(zones, yellow, weather)
+    sources = [zones, *trips, weather]
+    sources >> dbt_build >> summary(*sources)
