@@ -128,3 +128,8 @@ body { margin: 0; }
 .coverage { margin-bottom: 16px; font-size: 0.85rem; }
 .coverage summary { cursor: pointer; }
 .coverage summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+.comparison-title { margin: 24px 0 4px; font-size: 1.1rem; }
+.comparison-table { margin-top: 16px; }
+.comparison-table h3 { margin-top: 0; }
+.comparison-table th:first-child, .comparison-table td:first-child { text-align: left; }

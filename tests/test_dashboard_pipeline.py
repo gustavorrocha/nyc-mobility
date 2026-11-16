@@ -84,7 +84,7 @@ def test_figures_and_tables_render():
     quality = pipeline.quality_figure(QUALITY)
     assert [t.name for t in quality.data] == [
         "Inválida (fora de todas as métricas)",
-        "Métrica implausível (fora das médias)",
+        "Fora das médias (métrica ausente ou implausível)",
     ]
     assert list(quality.data[1].text) == ["7 (6,67%)"]
     assert pipeline._share(217, 7_052_499) == "<0,01%"

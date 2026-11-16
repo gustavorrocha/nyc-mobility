@@ -21,8 +21,9 @@ STATUS = {
 }
 QUALITY = {
     "invalid": ("Inválida (fora de todas as métricas)", "#d03b3b"),
-    "metric_issue": ("Métrica implausível (fora das médias)", "#ec835a"),
+    "metric_issue": ("Fora das médias (métrica ausente ou implausível)", "#ec835a"),
 }
+TRIP_DATASETS = {"tlc.yellow", "tlc.green", "tlc.fhv", "tlc.fhvhv"}
 REASONS = {
     "missing_required_value": "Campo obrigatório ausente",
     "nonexistent_local_time": "Horário local inexistente (DST)",
@@ -34,6 +35,7 @@ REASONS = {
     "implausible_distance": "Distância implausível",
     "implausible_speed": "Velocidade implausível",
     "implausible_amount": "Valor implausível",
+    "metric_unavailable": "Distância/valor não informados (FHV)",
 }
 
 
@@ -106,7 +108,10 @@ def published(runs: list[dict]) -> dict[tuple[str, str | None], dict]:
 
 def reconciliation(runs: list[dict], quality: list[dict], consumption: list[dict]) -> list[dict]:
     """raw (ingestão) = core (todas as corridas) e core − inválidas = analytics, por competência."""
-    raw = {p: r["rows_inserted"] for (d, p), r in published(runs).items() if d == "tlc.yellow"}
+    raw = {}
+    for (dataset, period), r in published(runs).items():
+        if dataset in TRIP_DATASETS:
+            raw[period] = raw.get(period, 0) + r["rows_inserted"]
     core, invalid = {}, {}
     for q in quality:
         core[q["period"]] = core.get(q["period"], 0) + q["trips"]

@@ -5,22 +5,65 @@
     indexes=[{'columns': ['period', 'source_version']}],
 ) }}
 
--- Uma linha por corrida de raw: nada é excluído. Corridas inválidas ficam com is_valid = false
--- e o primeiro motivo encontrado em invalid_reason; o analytics usa apenas as válidas.
--- Incremental: só competências cuja versão (arquivo yellow + cadastro de zonas) mudou.
+-- Uma linha por corrida de raw, de todas as modalidades: nada é excluído. Corridas inválidas
+-- ficam com is_valid = false e o primeiro motivo em invalid_reason; o analytics usa só as válidas.
+-- Incremental: só competências cuja versão (arquivos de viagens + cadastro de zonas) mudou.
 with periods as (
     {{ incremental_periods('trips_version') }}
 ),
 
-yellow as (
+-- Esquema comum: o que a fonte não informa fica NULL (nunca zero). `zones_required`: a TLC
+-- exige zonas e distância na modalidade (no FHV tradicional não; zona ausente é desconhecida).
+unioned as (
+    select
+        'yellow'::text as service_type, period, source_file_id, row_number,
+        tpep_pickup_datetime as pickup_local, tpep_dropoff_datetime as dropoff_local,
+        pulocationid, dolocationid, passenger_count, trip_distance,
+        fare_amount, tip_amount, total_amount, true as zones_required
+    from {{ source('raw', 'tlc_yellow_trips') }}
+
+    union all
+
+    select
+        'green', period, source_file_id, row_number,
+        lpep_pickup_datetime, lpep_dropoff_datetime,
+        pulocationid, dolocationid, passenger_count, trip_distance,
+        fare_amount, tip_amount, total_amount, true
+    from {{ source('raw', 'tlc_green_trips') }}
+
+    union all
+
+    select
+        'fhv', period, source_file_id, row_number,
+        pickup_datetime, dropoff_datetime,
+        pulocationid, dolocationid, null::bigint, null::double precision,
+        null::double precision, null::double precision, null::double precision, false
+    from {{ source('raw', 'tlc_fhv_trips') }}
+
+    union all
+
+    -- HVFHV: valor pago pelo passageiro = tarifa base + pedágios + taxas + gorjeta.
+    select
+        'fhvhv', period, source_file_id, row_number,
+        pickup_datetime, dropoff_datetime,
+        pulocationid, dolocationid, null::bigint, trip_miles,
+        base_passenger_fare, tips,
+        base_passenger_fare + coalesce(tolls, 0) + coalesce(bcf, 0) + coalesce(sales_tax, 0)
+            + coalesce(congestion_surcharge, 0) + coalesce(airport_fee, 0) + coalesce(tips, 0)
+            + coalesce(cbd_congestion_fee, 0),
+        true
+    from {{ source('raw', 'tlc_fhvhv_trips') }}
+),
+
+staged as (
     select
         t.*,
         p.source_version,
         to_date(t.period, 'YYYY-MM')::timestamp as period_start,
         to_date(t.period, 'YYYY-MM')::timestamp + interval '1 month' as period_end,
-        t.tpep_pickup_datetime at time zone 'America/New_York' as pickup_utc_default,
-        t.tpep_dropoff_datetime at time zone 'America/New_York' as dropoff_utc_default
-    from {{ source('raw', 'tlc_yellow_trips') }} as t
+        t.pickup_local at time zone 'America/New_York' as pickup_utc_default,
+        t.dropoff_local at time zone 'America/New_York' as dropoff_utc_default
+    from unioned as t
     inner join periods as p on p.period = t.period
 ),
 
@@ -29,14 +72,14 @@ yellow as (
 dst as (
     select
         *,
-        {{ ny_is_nonexistent('tpep_pickup_datetime', 'pickup_utc_default') }}
-            or {{ ny_is_nonexistent('tpep_dropoff_datetime', 'dropoff_utc_default') }}
+        {{ ny_is_nonexistent('pickup_local', 'pickup_utc_default') }}
+            or {{ ny_is_nonexistent('dropoff_local', 'dropoff_utc_default') }}
             as is_nonexistent,
-        {{ ny_ambiguous_alternative('tpep_pickup_datetime', 'pickup_utc_default') }}
+        {{ ny_ambiguous_alternative('pickup_local', 'pickup_utc_default') }}
             as pickup_utc_alternative,
-        {{ ny_ambiguous_alternative('tpep_dropoff_datetime', 'dropoff_utc_default') }}
+        {{ ny_ambiguous_alternative('dropoff_local', 'dropoff_utc_default') }}
             as dropoff_utc_alternative
-    from yellow
+    from staged
 ),
 
 -- Ocorrências possíveis de cada instante: primeira (early) e última (late); iguais quando o
@@ -105,13 +148,13 @@ zones as (
 
 trips as (
     select
-        'yellow'::text as service_type,
+        y.service_type,
         y.period,
         y.source_file_id,
         y.row_number as source_row_number,
         -- Horário local de NY como publicado pela TLC, e o mesmo instante em UTC.
-        y.tpep_pickup_datetime as pickup_at_local,
-        y.tpep_dropoff_datetime as dropoff_at_local,
+        y.pickup_local as pickup_at_local,
+        y.dropoff_local as dropoff_at_local,
         y.pickup_utc as pickup_at_utc,
         y.dropoff_utc as dropoff_at_utc,
         y.local_time_issue,
@@ -123,17 +166,20 @@ trips as (
         y.tip_amount,
         y.total_amount,
         -- Regras da ingestão (ordem dos instantes avaliada em UTC, correta também nas mudanças
-        -- de horário de verão), mais horário inexistente e zona fora do cadastro.
+        -- de horário de verão), mais horário inexistente e zona fora do cadastro. Zona ausente só
+        -- invalida onde a TLC a exige; informada e fora do cadastro invalida sempre.
         case
-            when y.tpep_pickup_datetime is null or y.tpep_dropoff_datetime is null
-                or y.trip_distance is null or y.pulocationid is null or y.dolocationid is null
+            when y.pickup_local is null or y.dropoff_local is null
+                or (y.zones_required and (y.trip_distance is null
+                    or y.pulocationid is null or y.dolocationid is null))
                 then 'missing_required_value'
             when y.local_time_issue = 'nonexistent' then 'nonexistent_local_time'
             when y.dropoff_utc < y.pickup_utc then 'dropoff_before_pickup'
             when y.trip_distance < 0 then 'negative_distance'
-            when not (y.tpep_pickup_datetime >= y.period_start
-                and y.tpep_pickup_datetime < y.period_end) then 'pickup_outside_period'
-            when pu.zone_id is null or dz.zone_id is null then 'unknown_zone'
+            when not (y.pickup_local >= y.period_start
+                and y.pickup_local < y.period_end) then 'pickup_outside_period'
+            when (y.pulocationid is not null and pu.zone_id is null)
+                or (y.dolocationid is not null and dz.zone_id is null) then 'unknown_zone'
         end as invalid_reason,
         y.source_version
     from converted as y
@@ -149,13 +195,14 @@ measured as (
     from trips
 )
 
--- Métricas implausíveis da origem (primeiro motivo): a corrida segue válida e conta na demanda,
--- mas fica fora das médias de duração, distância, velocidade e valor. Limites: vars metric_* em
--- dbt_project.yml. Nas inválidas fica NULL (já estão fora de tudo).
+-- Métricas não informadas pela fonte (FHV) ou implausíveis (primeiro motivo): a corrida segue
+-- válida e conta na demanda, mas fica fora das médias de duração, distância, velocidade e valor.
+-- Limites: vars metric_* em dbt_project.yml. Nas inválidas fica NULL (já estão fora de tudo).
 select
     *,
     case
         when not is_valid then null
+        when trip_distance_miles is null or total_amount is null then 'metric_unavailable'
         when duration_seconds < {{ var('metric_min_duration_minutes') }} * 60
             or duration_seconds > {{ var('metric_max_duration_minutes') }} * 60
             then 'implausible_duration'

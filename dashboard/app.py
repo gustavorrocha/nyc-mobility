@@ -3,7 +3,7 @@
 import psycopg
 from dash import Dash, Input, Output, State, dcc, html
 
-from dashboard import climate, mobility, pipeline
+from dashboard import climate, comparisons, mobility, pipeline
 from dashboard.db import query
 
 # Rota -> (título, descrição, conteúdo da página).
@@ -11,7 +11,7 @@ PAGES = {
     "/": (
         "Mobilidade urbana",
         "Demanda, distâncias, durações, tarifas e zonas de embarque das corridas válidas.",
-        mobility.layout,
+        lambda: [*mobility.layout(), *comparisons.service_layout(), *comparisons.period_layout()],
     ),
     "/clima": (
         "Mobilidade e clima",
@@ -43,7 +43,11 @@ def filter_options() -> dict:
         "SELECT zone_id, zone, borough FROM core.zones "
         "WHERE zone IS NOT NULL AND borough IS NOT NULL ORDER BY borough, zone"
     )
-    services = query("SELECT service_type, description FROM core.service_types ORDER BY 1")
+    services = query(
+        "SELECT s.service_type, s.description, EXISTS (SELECT FROM analytics.data_coverage c "
+        "WHERE c.service_type = s.service_type AND c.status = 'available') AS available "
+        "FROM core.service_types s ORDER BY 1"
+    )
     return {**period, "zones": zones, "services": services}
 
 
@@ -120,7 +124,11 @@ def layout() -> html.Div:
                                 {"label": s["description"], "value": s["service_type"]}
                                 for s in opts["services"]
                             ],
-                            value=[s["service_type"] for s in opts["services"]],
+                            value=[
+                                s["service_type"]
+                                for s in opts["services"]
+                                if s.get("available", True)
+                            ],
                             multi=True,
                             clearable=False,
                         ),

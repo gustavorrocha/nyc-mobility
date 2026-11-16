@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from test_weather_zones import weather_json, zones_csv
 
-from dashboard import climate, coverage, mobility, pipeline
+from dashboard import climate, comparisons, coverage, mobility, pipeline
 from nyc_mobility.build import build as tracked_build
 from nyc_mobility.ingest import ingest
 
@@ -389,7 +389,7 @@ def test_dashboard_http_callbacks_use_coverage_and_build_history(engine, monkeyp
         ("f-service", "value"): ["yellow"],
         ("url", "pathname"): "/pipeline",
     }
-    for component in ("m-kpis", "c-cards", "p-kpis"):
+    for component in ("m-kpis", "c-cards", "p-kpis", "s-trend", "t-coverage"):
         key = next(k for k in app.callback_map if component in k)
         callback = app.callback_map[key]
         response = client.post(
@@ -413,6 +413,70 @@ def test_dashboard_http_callbacks_use_coverage_and_build_history(engine, monkeyp
             assert "p-builds-body" in payload and "deliberate_failure" in response.get_data(
                 as_text=True
             )
-        else:
+        elif component in ("m-kpis", "c-cards"):
             prefix = component[0]
             assert f"{prefix}-coverage" in payload
+        elif component == "s-trend":
+            assert "s-share" in payload and "s-metrics" in payload
+        else:
+            assert "t-metrics" in payload
+
+
+def test_other_trip_types_and_comparisons(
+    engine, landing, tlc_parquet, yellow_parquet, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("POSTGRES_DB", engine.url.database)
+    monkeypatch.setenv("DASHBOARD_DB_USER", engine.url.username)
+    monkeypatch.setenv("DASHBOARD_DB_PASSWORD", engine.url.password)
+    for dataset, pu in (("green", 1), ("fhv", [1, None]), ("fhvhv", 2)):
+        url = tlc_parquet(
+            tmp_path / dataset / "t.parquet", dataset, "2024-08", rows=2, pu_location=pu
+        )
+        ingest(f"tlc.{dataset}", "2024-08", url=url)
+    ingest(
+        "tlc.yellow", "2024-08", url=yellow_parquet(tmp_path / "yellow.parquet", "2024-08", rows=3)
+    )
+    # Setembro tem somente Yellow, com uma corrida inválida (demanda zero, carga disponível).
+    ingest(
+        "tlc.yellow",
+        "2024-09",
+        url=yellow_parquet(tmp_path / "september.parquet", "2024-09", rows=1),
+    )
+    dbt_build()
+
+    assert rows(
+        engine,
+        "SELECT service_type, pickup_zone_id, is_valid, metric_issue, trip_distance_miles, "
+        "total_amount FROM core.trips WHERE period = '2024-08' AND service_type != 'yellow' "
+        "ORDER BY service_type, source_row_number",
+    ) == [
+        ("fhv", 1, True, "metric_unavailable", None, None),
+        ("fhv", None, True, "metric_unavailable", None, None),
+        ("fhvhv", 2, True, None, 3.0, 27.75),
+        ("fhvhv", 2, True, None, 3.0, 27.75),
+        ("green", 1, True, None, 2.0, 12.0),
+        ("green", 1, True, None, 2.0, 12.0),
+    ]
+    services = ["yellow", "green", "fhv", "fhvhv"]
+    p = mobility.params("2024-08-01", "2024-08-31", None, None, services)
+    totals = comparisons.load_services(p)
+    assert [r["trips"] for r in totals] == [2, 2, 2, 2]
+    assert [r["measured"] for r in totals] == [2, 2, 0, 2]
+    assert [r["share"] for r in comparisons.service_rows(totals)] == ["25,0%"] * 4
+    assert totals[2]["amount_per_trip"] is None
+    assert mobility.load_kpis(p)["trips"] == 8  # Inclui a corrida FHV sem zona.
+    assert mobility.load_kpis(p)["amount_per_trip"] == 99.5 / 6  # Médias ponderadas, sem FHV.
+    assert sum(r["trips"] for r in mobility.load_zone_trips(p)) == 7
+
+    filtered = comparisons.load_services({**p, "zones": [1]})
+    assert [r["trips"] for r in filtered] == [2, 2, 1, 0]
+    spanning = {**p, "end": p["end"].replace(month=10)}
+    trend = comparisons.load_service_trend(spanning, "day")
+    assert all(r["trips"] is None for r in trend if r["t"].month == 9)
+    assert sum(r["trips"] or 0 for r in trend) == 8
+    september = mobility.params("2024-09-01", "2024-09-30", None, None, ["yellow"])
+    assert comparisons.load_services(september)[0]["trips"] == 0
+    assert all(r["trips"] == 0 for r in comparisons.load_service_trend(september, "day"))
+    note, table = comparisons.update_periods("2024-08-01", "2024-08-31", None, None, services)
+    assert "Cobertura incompleta" in note
+    assert all(row.children[-1].children == "—" for row in table.children.children[1].children)

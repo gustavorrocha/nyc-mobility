@@ -1,6 +1,6 @@
 """Fluxo comum de ingestão idempotente e transacional, delegando a carga a cada adaptador.
 
-Um adaptador é um módulo com SOURCE, DATASET, PERIODIC, `url(period)`, `load(...)` e,
+Um adaptador (módulo ou objeto) tem SOURCE, DATASET, PERIODIC, `url(period)`, `load(...)` e,
 opcionalmente, `landing_name(period)` e `fingerprint(path)`. `load` valida o arquivo e substitui
 a versão publicada em raw sem fazer commit; o commit (dados + status da execução) é feito aqui.
 """
@@ -9,11 +9,11 @@ import json
 
 import sqlalchemy as sa
 
-from nyc_mobility import landing, openmeteo, tlc_yellow, tlc_zones
+from nyc_mobility import landing, openmeteo, tlc_trips, tlc_zones
 from nyc_mobility.common import period_bounds
 from nyc_mobility.config import database_url, landing_dir
 
-ADAPTERS = {f"{m.SOURCE}.{m.DATASET}": m for m in (tlc_yellow, tlc_zones, openmeteo)}
+ADAPTERS = {f"{m.SOURCE}.{m.DATASET}": m for m in (*tlc_trips.ADAPTERS, tlc_zones, openmeteo)}
 
 
 class ConcurrentLoadError(RuntimeError):

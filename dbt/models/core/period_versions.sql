@@ -20,11 +20,17 @@ zones as (
     where dataset = 'tlc.taxi_zones'
 ),
 
+-- Viagens: arquivos publicados de todas as modalidades da competência (ex.: carregar o HVFHV
+-- de um mês já processado muda a versão e reprocessa esse mês).
 trips as (
-    select p.period, 'tlc.yellow=' || p.source_file_id || ';' || z.version as version
+    select
+        p.period,
+        string_agg(p.dataset || '=' || p.source_file_id, ';' order by p.dataset)
+            || ';' || z.version as version
     from published as p
     cross join zones as z
-    where p.dataset = 'tlc.yellow'
+    where p.dataset in ('tlc.yellow', 'tlc.green', 'tlc.fhv', 'tlc.fhvhv')
+    group by p.period, z.version
 ),
 
 weather as (

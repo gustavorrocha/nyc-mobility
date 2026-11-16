@@ -19,7 +19,11 @@ TOP_ZONES = 15
 GEOJSON_URL = "/assets/taxi_zones.geojson"
 NYC_CENTER = {"lat": 40.70, "lon": -73.94}
 
-SOURCE = "analytics.trip_demand_hourly AS d JOIN core.zones AS z ON z.zone_id = d.pickup_zone_id"
+# FHV pode não informar zona: essas corridas contam nos totais, mas não no mapa/ranking.
+SOURCE = (
+    "analytics.trip_demand_hourly AS d LEFT JOIN core.zones AS z ON z.zone_id = d.pickup_zone_id"
+)
+KNOWN_ZONE = "d.pickup_zone_id IS NOT NULL"
 WHERE = f"""
     d.hour_local >= %(start)s AND d.hour_local < %(end)s
     AND d.service_type = ANY(%(services)s)
@@ -96,7 +100,7 @@ def load_ranking(p: dict) -> list[dict]:
     return query(
         f"""SELECT z.zone_id, z.zone, z.borough, sum(d.trip_count)::bigint AS trips,
                    sum(d.trip_count)::float8 / sum(sum(d.trip_count)) OVER () AS share
-            FROM {SOURCE} WHERE {WHERE}
+            FROM {SOURCE} WHERE {WHERE} AND {KNOWN_ZONE}
             GROUP BY 1, 2, 3 ORDER BY trips DESC, z.zone LIMIT %(top)s""",
         {**p, "top": TOP_ZONES},
     )
@@ -106,7 +110,7 @@ def load_zone_trips(p: dict) -> list[dict]:
     """Corridas por zona para o mapa; ignora o filtro de zonas para todas seguirem clicáveis."""
     return query(
         f"""SELECT z.zone_id, z.zone, z.borough, sum(d.trip_count)::bigint AS trips
-            FROM {SOURCE} WHERE {WHERE} GROUP BY 1, 2, 3""",
+            FROM {SOURCE} WHERE {WHERE} AND {KNOWN_ZONE} GROUP BY 1, 2, 3""",
         {**p, "zones": None},
     )
 
@@ -275,7 +279,7 @@ def layout() -> list:
                 theme.chart_card(
                     f"Top {TOP_ZONES} zonas de embarque",
                     "m-ranking",
-                    "Corridas e participação no total filtrado.",
+                    "Corridas e participação no total filtrado (com zona informada).",
                     480,
                 ),
                 theme.chart_card(

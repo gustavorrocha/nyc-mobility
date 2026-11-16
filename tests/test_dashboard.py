@@ -102,3 +102,20 @@ def test_layout_reports_database_unavailable(monkeypatch):
     monkeypatch.delenv("DASHBOARD_DB_PASSWORD", raising=False)
     tree = dash_app.layout()
     assert tree.children[0].children == "Banco de dados indisponível"
+
+
+def test_initial_selection_only_includes_modalities_with_available_data(monkeypatch):
+    monkeypatch.setattr(
+        dash_app,
+        "filter_options",
+        lambda: {
+            "first_day": date(2025, 1, 1),
+            "last_day": date(2025, 1, 31),
+            "zones": ZONES,
+            "services": [
+                {"service_type": "yellow", "description": "Yellow Taxi", "available": True},
+                {"service_type": "green", "description": "Green Taxi", "available": False},
+            ],
+        },
+    )
+    assert dash_app.layout()["f-service"].value == ["yellow"]

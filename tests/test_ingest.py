@@ -9,7 +9,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 import sqlalchemy as sa
 
-from nyc_mobility import tlc_yellow
+from nyc_mobility.common import ContractError
 from nyc_mobility.ingest import ConcurrentLoadError, ingest
 
 
@@ -89,7 +89,7 @@ def test_failed_load_preserves_published_version(engine, landing, yellow_parquet
             "tlc.yellow", "2025-04", url=yellow_parquet(src, "2025-04", rows=7, pu_location=2**40)
         )
     bad = yellow_parquet(src, "2025-04", drop_columns=["trip_distance"])
-    with pytest.raises(tlc_yellow.ContractError):
+    with pytest.raises(ContractError):
         ingest("tlc.yellow", "2025-04", url=bad)
 
     assert raw_files(engine, "2025-04") == [(published["source_file_id"], 5)]
@@ -169,3 +169,25 @@ def test_unchanged_source_is_not_downloaded_again(engine, landing, yellow_parque
     assert republished["status"] == "succeeded"
     assert republished["source_file_id"] != first["source_file_id"]
     assert raw_files(engine, "2023-05") == [(republished["source_file_id"], 3)]
+
+
+@pytest.mark.parametrize("dataset", ["green", "fhv", "fhvhv"])
+def test_other_trip_types_load_into_their_raw_tables(
+    engine, landing, tlc_parquet, tmp_path, dataset
+):
+    # No FHV a TLC não exige zonas: embarque sem zona não é sinalizado.
+    pu = [1, None, 2] if dataset == "fhv" else 1
+    url = tlc_parquet(tmp_path / f"{dataset}.parquet", dataset, "2025-01", pu_location=pu)
+    result = ingest(f"tlc.{dataset}", "2025-01", url=url)
+    assert (result["status"], result["rows_inserted"], result["rows_flagged"]) == (
+        "succeeded",
+        3,
+        0,
+    )
+    with engine.connect() as conn:
+        loaded = conn.scalar(
+            sa.text(f"SELECT count(*) FROM raw.tlc_{dataset}_trips WHERE source_file_id = :f"),
+            {"f": result["source_file_id"]},
+        )
+    assert loaded == 3
+    assert ingest(f"tlc.{dataset}", "2025-01", url=url)["status"] == "skipped"

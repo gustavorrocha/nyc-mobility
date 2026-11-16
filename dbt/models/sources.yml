@@ -5,6 +5,9 @@ sources:
     description: Versão publicada de cada fonte/competência, carregada pela CLI de ingestão.
     tables:
       - name: tlc_yellow_trips
+      - name: tlc_green_trips
+      - name: tlc_fhv_trips
+      - name: tlc_fhvhv_trips
       - name: tlc_taxi_zones
       - name: openmeteo_weather_hourly
 
