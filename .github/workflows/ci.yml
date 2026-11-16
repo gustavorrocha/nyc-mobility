@@ -13,6 +13,40 @@ permissions:
   contents: read
 
 jobs:
+  observability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validar Compose e configurações de monitoramento
+        run: |
+          cp .env.example .env
+          docker compose --profile observability config --quiet
+          docker compose --profile observability run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
+          docker compose --profile observability run --rm --no-deps --entrypoint promtool prometheus test rules /etc/prometheus/alerts_test.yml
+          docker compose --profile observability run --rm --no-deps --entrypoint amtool alertmanager check-config /etc/alertmanager/alertmanager.yml
+      - name: Verificar provisionamento real do Grafana
+        run: |
+          docker compose --profile observability up -d --no-deps grafana
+          curl --fail --retry 30 --retry-all-errors --retry-delay 2 http://127.0.0.1:3000/api/dashboards/uid/nyc-publication -o /tmp/dashboard.json
+          python - <<'PY'
+          import json
+          from urllib.request import urlopen
+          with open('/tmp/dashboard.json') as f:
+              dashboard = json.load(f)['dashboard']
+          assert len(dashboard['panels']) == 4
+          assert all(p['datasource']['uid'] == 'prometheus' for p in dashboard['panels'])
+          with urlopen('http://127.0.0.1:3000/api/datasources/uid/prometheus') as response:
+              source = json.load(response)
+          assert source['url'] == 'http://prometheus:9090'
+          PY
+      - name: Logs de diagnóstico
+        if: failure()
+        run: docker compose --profile observability logs --no-color
+      - name: Encerrar ambiente descartável do CI
+        if: always()
+        run: docker compose --profile observability down --volumes
+
   lint-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15

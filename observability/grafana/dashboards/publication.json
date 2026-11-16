@@ -1,0 +1,136 @@
+{
+  "uid": "nyc-publication",
+  "title": "NYC Mobility - Publicação",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {"from": "now-24h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "title": "Horas desde a última publicação validada",
+      "description": "Idade da publicação no dashboard; não indica disponibilidade de novos arquivos na TLC.",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "(time() - nyc_mobility_publication_timestamp_seconds) / 3600", "instant": true}
+      ],
+      "fieldConfig": {"defaults": {"unit": "h", "decimals": 1, "noValue": "Sem dados"}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "id": 2,
+      "title": "Última coleta do exportador",
+      "description": "Mostra o resultado da última coleta; o alerta só dispara após dois minutos de falha contínua.",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "up{job=\"nyc_mobility\"}", "instant": true}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Sem dados",
+          "mappings": [
+            {"type": "value", "options": {"0": {"text": "Falha", "color": "red"}, "1": {"text": "Coleta OK", "color": "green"}}}
+          ]
+        },
+        "overrides": []
+      },
+      "options": {"colorMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "id": 3,
+      "title": "Resultado do ultimo build concluido",
+      "description": "Considera apenas builds concluidos. Um build em andamento preserva o ultimo resultado.",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nyc_mobility_build_success",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "Sem build concluido",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Falhou",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "Sucesso",
+                  "color": "green"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Duracao do ultimo build concluido",
+      "description": "Considera apenas builds concluidos. Um build em andamento preserva o ultimo resultado.",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nyc_mobility_build_duration_seconds",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Sem build concluido"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    }
+  ]
+}

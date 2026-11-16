@@ -31,6 +31,164 @@ do Airflow (`airflow-init`) e do projeto (`migrate`) e inicia o Airflow 3.4 com 
 - UI do Airflow: <http://127.0.0.1:8080> (sem login; somente para desenvolvimento local).
 - PostgreSQL: `127.0.0.1:5432` (porta configurável por `POSTGRES_HOST_PORT`).
 
+## Observabilidade local
+
+Com o `.env` configurado e o banco migrado, suba o conjunto completo:
+
+```bash
+docker compose --profile observability up -d --build prometheus metrics-exporter grafana alertmanager mailpit
+```
+
+| Serviço | Acesso local | Papel |
+|---|---|---|
+| Prometheus | <http://127.0.0.1:9090> | Coleta, consultas e avaliação de regras |
+| Grafana | <http://127.0.0.1:3000/d/nyc-publication> | Painel da publicação, coleta e builds |
+| Alertmanager | <http://127.0.0.1:9093> | Agrupamento e encaminhamento de alertas |
+| Mailpit | <http://127.0.0.1:8025> | Caixa de teste de notificações |
+
+O exportador acessa o PostgreSQL como `dashboard_reader` e só fica acessível pela rede
+do Compose. A observabilidade é opcional e não participa da execução da ingestão/dbt.
+As portas das interfaces são restritas a `127.0.0.1`; a configuração é para uso local.
+
+### Primeiro contato com Prometheus
+
+```bash
+docker compose --profile observability up -d prometheus
+```
+
+Acesse <http://127.0.0.1:9090> e consulte `up{job="prometheus"}`. O valor `1`
+indica que a última coleta do próprio Prometheus teve sucesso. Em **Status → Target
+health**, confira o alvo `prometheus` e seu estado. O arquivo
+[`observability/prometheus.yml`](observability/prometheus.yml) configura uma coleta a
+cada 15 segundos; o volume `prometheus-data` preserva o histórico entre reinícios.
+
+Suba também o exportador para consultar a última publicação validada:
+
+```bash
+docker compose --profile observability up -d --build metrics-exporter
+```
+
+O exportador lê `metadata.analytics_publication` com o usuário de leitura do dashboard e
+expõe `nyc_mobility_publication_timestamp_seconds`, um instante Unix em segundos. O Prometheus
+consulta `/metrics` a cada 15 segundos. Execute `up{job="nyc_mobility"}` para verificar a
+coleta; `1` indica que o exportador e sua consulta ao banco responderam. Para saber quantas
+horas se passaram desde a publicação, consulte:
+
+```promql
+(time() - nyc_mobility_publication_timestamp_seconds) / 3600
+```
+
+Sem publicação, não há amostra da métrica; erro no banco faz a coleta falhar, em vez de
+inventar um valor. Essa métrica não indica se a TLC publicou novos arquivos ou se a ingestão
+falhou. Para parar os dois serviços: `docker compose stop prometheus metrics-exporter`.
+
+### Painel no Grafana
+
+```bash
+docker compose --profile observability up -d grafana
+```
+
+Abra <http://127.0.0.1:3000/d/nyc-publication> para ver as horas desde a última
+publicação. O Grafana consulta o Prometheus pela rede do Compose; a fonte de dados e o
+painel são criados a partir dos arquivos versionados em `observability/grafana/`.
+O painel usa a mesma expressão PromQL mostrada acima e mostra “Sem dados” quando não
+há amostra. Um segundo indicador consulta `up{job="nyc_mobility"}`: `1` aparece como
+“Coleta OK” e `0` como “Falha”; sem série, mostra “Sem dados”. Esse resultado reflete a
+última coleta, enquanto o alerta abaixo espera dois minutos de falha contínua.
+A visualização anônima é apenas para desenvolvimento local, na porta 3000
+restrita ao computador. Para parar o Grafana: `docker compose stop grafana`.
+
+### Primeiro alerta
+
+O Prometheus avalia `ExportadorIndisponivel` a cada 15 segundos. Se a coleta do alvo
+`nyc_mobility` falhar continuamente por dois minutos, o alerta passa de `pending` para
+`firing`; quando a coleta volta a funcionar, ele se resolve. Os dois minutos são um valor
+didático para este ambiente local. Consulte <http://127.0.0.1:9090/alerts> para ver o estado.
+O alerta aparece no Prometheus e é encaminhado ao Alertmanager descrito abaixo.
+
+Para investigar, confira `docker compose ps metrics-exporter postgres`, os logs com
+`docker compose logs --tail=50 metrics-exporter` e o alvo em
+<http://127.0.0.1:9090/targets>. O alerta só cobre o alvo configurado e não detecta se o
+próprio Prometheus parar nem se a ingestão falhar. A regra e seus cenários estão em
+`observability/alerts.yml` e `observability/alerts_test.yml`. Rode os testes com:
+
+```bash
+docker compose --profile observability run --rm --no-deps --entrypoint promtool prometheus test rules /etc/prometheus/alerts_test.yml
+```
+
+### Alertmanager local
+
+```bash
+docker compose --profile observability up -d alertmanager
+docker compose --profile observability restart prometheus
+```
+
+O Prometheus avalia as regras e envia alertas ativos ao Alertmanager. Ele os agrupa por
+`alertname` e permite consultá-los ou silenciá-los em <http://127.0.0.1:9093>. O volume
+`alertmanager-data` preserva os silêncios entre reinícios. O receptor `local` envia e-mails
+para o Mailpit, uma caixa SMTP de teste dentro do Compose. As durações de agrupamento estão
+em `observability/alertmanager.yml`.
+
+Para investigar o encaminhamento, confira os serviços com
+`docker compose ps prometheus alertmanager` e o campo “Alertmanagers” em
+<http://127.0.0.1:9090/status>. Para parar o serviço: `docker compose stop alertmanager`.
+
+### Caixa de notificações local
+
+```bash
+docker compose --profile observability up -d mailpit alertmanager
+docker compose --profile observability restart alertmanager
+```
+
+Abra <http://127.0.0.1:8025> para ver as mensagens de alerta e de recuperação. O
+Alertmanager envia por SMTP para `mailpit:1025` na rede interna; a porta SMTP não é
+publicada no host. Os endereços `example.test` são fictícios e o Mailpit captura os
+e-mails localmente, sem encaminhá-los. A conexão SMTP sem TLS é apenas para este ambiente
+de teste. As mensagens ficam em memória e são perdidas ao recriar ou reiniciar o Mailpit.
+O agrupamento aguarda 30 segundos antes da primeira notificação. Para parar a caixa:
+`docker compose stop mailpit`.
+
+Para testar os dois estados sem interromper o pipeline, execute no host:
+
+```bash
+python scripts/testar_notificacao_local.py
+```
+
+O script cria um alerta sintético com identificador único, espera o e-mail `[FIRING]`,
+encerra o alerta e espera o e-mail `[RESOLVED]`. A recuperação pode demorar até cinco
+minutos por causa de `group_interval`; ambas as mensagens ficam no Mailpit. O teste não
+verifica a regra de coleta do Prometheus, que tem seus próprios testes com `promtool`.
+
+### Monitorar builds dbt
+
+O exportador também consulta o último build concluído em `metadata.analytics_runs`:
+
+| Métrica | Significado |
+|---|---|
+| `nyc_mobility_build_success` | `1` = sucesso; `0` = falha |
+| `nyc_mobility_build_duration_seconds` | Duração do mesmo build, em segundos |
+
+São gauges do último resultado, não contadores ou histogramas de todas as execuções.
+Sem build concluído, as métricas não têm amostras e os painéis mostram “Sem build concluido”.
+Um build em andamento preserva o último resultado concluído. O Grafana mostra resultado e
+duração, enquanto a publicação validada continua sendo monitorada separadamente.
+
+O alerta `UltimoBuildFalhou` dispara após um minuto observando resultado de falha. Esse
+atraso é didático; não tenta reexecutar o build. Consulte o Pipeline Health para identificar
+a falha e os resultados dbt; corrija a causa e execute novamente o build. O alerta se resolve
+quando um build posterior conclui com sucesso. Se o exportador cair, investigue primeiro o
+alerta de coleta, pois o resultado do build deixa de ser observado.
+
+Para aplicar a atualização no ambiente já configurado:
+
+```bash
+docker compose --profile observability up -d --build --no-deps metrics-exporter
+docker compose --profile observability restart prometheus
+```
+
+Os testes em `tests/test_metrics.py` cobrem sucesso, falha, ausência de histórico e erro
+de banco. Os testes do `promtool` cobrem o período pendente, disparo e recuperação do alerta.
+
 ## Comandos de validação
 
 ```bash
@@ -59,6 +217,11 @@ uv run --env-file .env dbt debug --project-dir dbt --profiles-dir dbt
 (service container; no CI os testes de integração falham em vez de serem pulados), `dbt build`
 sobre fixtures (dentro do Pytest), migrações + `db check` e build da imagem do Airflow (sem push
 nem deploy).
+
+O job `observability` valida o Compose, as configurações com `promtool`/`amtool`, os
+cenários das regras de alerta e a criação real da fonte de dados e dos quatro painéis
+no Grafana descartável. Ele não consulta dados do projeto nem executa o teste SMTP de
+vários minutos; este pode ser repetido com `scripts/testar_notificacao_local.py`.
 
 ## Transformação (dbt)
 

@@ -172,7 +172,8 @@ Execução: monthly_pipeline(period=AAAA-MM)
 - Arquivos republicados serão carregados/validados em estrutura temporária e substituirão a competência de `raw` **em uma transação**; falhas preservarão a versão anterior.
 - A DAG limitará a concorrência global a uma execução ativa; adicionalmente, o **PostgreSQL terá proteção por fonte/dataset/competência** para evitar cargas conflitantes mesmo se disparadas fora do Airflow (mecanismo exato a definir, por exemplo lock transacional/advisory).
 - Uma falha no dbt **não desfaz a ingestão `raw` bem-sucedida**. A execução analítica será marcada como falha e poderá ser repetida sem novo download.
-- **Não se presume publicação atômica entre todos os modelos dbt**. Resultados não serão tratados como válidos até os testes terminarem com sucesso; a estratégia para consumidores concorrentes fica pendente.
+- Os modelos dbt não são publicados atomicamente entre si. Após validação, o build
+  publica os modelos de consumo em `serving` numa única transação, conforme a seção 8.
 
 ### 5.6. Mesmo código no ambiente local, no Airflow e no CI
 
@@ -191,7 +192,8 @@ Execução: monthly_pipeline(period=AAAA-MM)
 
 ## 7. Plano de implementação incremental e critérios de aceite
 
-**Status inicial de todas as etapas: `pending`.** O agente de código deve executar **uma única etapa por vez**, sem antecipar funcionalidades de etapas futuras. Ao concluir uma etapa, parar e solicitar validação explícita do responsável pelo projeto.
+As etapas abaixo registram o plano original do MVP, já implementado. Para novas evoluções,
+executar uma entrega coesa por vez e validar com o responsável antes de ampliar o escopo.
 
 | Etapa | Escopo | Critério de aceite mínimo |
 |---|---|---|
@@ -218,15 +220,28 @@ Execução: monthly_pipeline(period=AAAA-MM)
 - **Depois:** `Resultado da etapa` — alterações, testes/saídas, pendências e instruções para validação.
 - **Fechamento:** `Aguardando aprovação para a próxima etapa.`
 
-## 8. Detalhes ainda não fechados
+## 8. Estado implementado e evoluções
 
-As decisões a seguir **não foram aprovadas nem implementadas** e não exigem novas ferramentas neste momento:
+O plano acima registra a sequência original do MVP. As etapas 0–6 foram implementadas;
+os comandos atuais e as limitações operacionais estão no README. O projeto também inclui
+Green/FHV/HVFHV, comparações no dashboard e ingestão diária com backfill limitado.
 
-- Valor exato de retries, backoff, timeouts, thresholds de qualidade e alertas.
-- Operador específico do Airflow e empacotamento exato dos ambientes/virtualenvs e imagens Docker, a validar quanto à compatibilidade de versões.
-- Mecanismo concreto de lock por fonte/competência no PostgreSQL.
+- Airflow usa `LocalExecutor`, CLIs em processos separados e ambientes isolados para o
+  pacote e o dbt. Retentativas e timeouts estão definidos nas DAGs.
+- A ingestão usa advisory locks por fonte/competência; o build rastreado tem seu próprio
+  advisory lock e verifica as versões dos insumos antes de publicar.
+- Os modelos dbt são áreas de trabalho. A migração `0007` e o build rastreado publicam
+  agregados e cadastros em `serving` numa transação única; falhas preservam a publicação
+  anterior. Cada callback analítico lê uma transação `REPEATABLE READ`.
+- O perfil opcional `observability` contém exportador de leitura, Prometheus, Grafana,
+  Alertmanager e Mailpit. Monitora publicação, último build e coleta, com alertas e
+  notificações locais. As regras são testadas com `promtool`; o CI verifica configurações
+  e provisionamento do Grafana. O teste SMTP de alerta/recuperação é manual e reproduzível.
+
+Evoluções ainda abertas:
+
+- Ajustar os tempos didáticos dos alertas a uma política operacional e monitorar falhas
+  de ingestão e atraso de dados considerando o calendário de publicação das fontes.
 - Política de retenção/limpeza de arquivos antigos e dimensionamento de disco local.
 - Regra definitiva para resolver horários ambíguos ou inexistentes nas transições do horário de verão da TLC.
-- Política de publicação de `analytics` durante reconstruções e consultas concorrentes; os testes indicam validade, mas não fornecem atomicidade entre todos os modelos.
-
-**Estado atual:** 7 decisões de engenharia, 7 operacionais e 6 de execução aprovadas. Plano de implementação incremental documentado; **nenhuma DAG, código, migração, workflow de CI ou configuração Docker foi criada, alterada ou executada nesta atualização**.
+- Destino real de notificações e operação fora do ambiente local.
