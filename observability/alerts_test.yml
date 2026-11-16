@@ -1,0 +1,26 @@
+rule_files:
+  - alerts.yml
+evaluation_interval: 15s
+tests:
+  - name: falha persistente e recuperação
+    interval: 15s
+    input_series:
+      - series: 'up{job="nyc_mobility",instance="metrics-exporter:9101"}'
+        values: '1 0+0x9 1+0x2'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ExportadorIndisponivel
+        exp_alerts: []
+      - eval_time: 2m15s
+        alertname: ExportadorIndisponivel
+        exp_alerts:
+          - exp_labels:
+              job: nyc_mobility
+              instance: metrics-exporter:9101
+              severity: warning
+            exp_annotations:
+              summary: "Prometheus não consegue coletar as métricas do projeto"
+              description: "Confira o exportador, sua conexão ao PostgreSQL e o alvo no Prometheus."
+      - eval_time: 2m45s
+        alertname: ExportadorIndisponivel
+        exp_alerts: []

@@ -1,0 +1,11 @@
+groups:
+  - name: nyc-mobility
+    rules:
+      - alert: ExportadorIndisponivel
+        expr: up{job="nyc_mobility"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus não consegue coletar as métricas do projeto"
+          description: "Confira o exportador, sua conexão ao PostgreSQL e o alvo no Prometheus."

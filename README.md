@@ -76,6 +76,24 @@ O painel usa a mesma expressão PromQL mostrada acima e mostra “Sem dados” q
 há amostra. A visualização anônima é apenas para desenvolvimento local, na porta 3000
 restrita ao computador. Para parar o Grafana: `docker compose stop grafana`.
 
+### Primeiro alerta
+
+O Prometheus avalia `ExportadorIndisponivel` a cada 15 segundos. Se a coleta do alvo
+`nyc_mobility` falhar continuamente por dois minutos, o alerta passa de `pending` para
+`firing`; quando a coleta volta a funcionar, ele se resolve. Os dois minutos são um valor
+didático para este ambiente local. Consulte <http://127.0.0.1:9090/alerts> para ver o estado.
+O alerta aparece no Prometheus, mas **não envia notificações**: ainda não configuramos Alertmanager.
+
+Para investigar, confira `docker compose ps metrics-exporter postgres`, os logs com
+`docker compose logs --tail=50 metrics-exporter` e o alvo em
+<http://127.0.0.1:9090/targets>. O alerta só cobre o alvo configurado e não detecta se o
+próprio Prometheus parar nem se a ingestão falhar. A regra e seus cenários estão em
+`observability/alerts.yml` e `observability/alerts_test.yml`. Rode os testes com:
+
+```bash
+docker compose --profile observability run --rm --no-deps --entrypoint promtool prometheus test rules /etc/prometheus/alerts_test.yml
+```
+
 ## Comandos de validação
 
 ```bash
