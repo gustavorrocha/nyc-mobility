@@ -8,7 +8,7 @@ implementação: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 | Caminho | Conteúdo |
 |---|---|
 | `src/nyc_mobility/` | Pacote Python e CLI `nyc-mobility` |
-| `src/nyc_mobility/migrations/` | Migrações Alembic (schemas `raw`, `core`, `analytics`, `metadata`) |
+| `src/nyc_mobility/migrations/` | Migrações Alembic (`raw`, `core`, `analytics`, `metadata`, `serving`) |
 | `dbt/` | Projeto dbt (`core` e `analytics`) |
 | `dags/` | DAGs do Airflow |
 | `docker/` | Imagem do Airflow (com virtualenvs isolados para o pacote e o dbt) e init do PostgreSQL |
@@ -88,7 +88,8 @@ uv run --env-file .env nyc-mobility build
 - O resultado por modelo/teste vem do artefato oficial
   [`run_results.json`](https://docs.getdbt.com/reference/artifacts/run-results-json). Invocações
   diretas de `dbt build` continuam possíveis, mas não registram histórico nem participam do lock.
-- Os resultados registrados são históricos: não tornam atômica a publicação entre modelos.
+- Os resultados registrados são históricos. `core` e `analytics` são áreas de trabalho; o
+  dashboard consulta apenas a última versão validada em `serving` (publicação descrita abaixo).
   Se o processo for encerrado à força, o registro pode permanecer `running`; conferir os logs
   do Airflow antes de reexecutar. Não há sucesso presumido para execuções anteriores à migração.
 
@@ -174,6 +175,53 @@ por outra migração com o mesmo identificador.
   conhecida continuam fora das comparações climáticas.
 - Pipeline Health separa o histórico de ingestões do histórico de transformações dbt e mostra
   competências validadas na execução, resultados de modelos/testes e falhas.
+
+### Publicação validada
+
+- A migração `0007` cria `serving` e `metadata.analytics_publication`. Após o dbt e seus testes,
+  o build copia demanda, clima, qualidade, cobertura, zonas e modalidades em **uma transação**,
+  junto do marcador de publicação e do sucesso da execução. Falhas mantêm a publicação anterior.
+- O dashboard usa apenas essas tabelas de consumo; Pipeline Health continua observando os
+  metadados e os modelos de trabalho, e identifica a publicação atual. O cabeçalho informa a
+  data da última validação. Sem uma primeira publicação, a interface orienta executar o build.
+- Cada callback lê em uma transação `REPEATABLE READ`. A publicação usa `DELETE` + `INSERT`,
+  preservando as versões visíveis a leitores em andamento; não usa `TRUNCATE` nem substitui
+  tabelas de consumo durante a atualização. Referência: [isolamento no PostgreSQL 17](https://www.postgresql.org/docs/17/transaction-iso.html).
+- A cobertura do dashboard passa a descrever a **publicação validada**, não uma carga raw
+  recém-chegada. Novas ingestões e builds com falha ficam no Pipeline Health até serem publicados.
+- Uma alteração em colunas/tipos exige migrar explicitamente a tabela `serving` correspondente.
+  A publicação recusa schemas incompatíveis e preserva a versão anterior. O snapshot de consumo
+  duplica apenas agregados e cadastros, sem copiar os milhões de corridas de `core.trips`.
+- Aplique `nyc-mobility db upgrade` e execute `nyc-mobility build` **antes** de atualizar o
+  container do dashboard. Use o build rastreado; não execute dbt direto concorrentemente a ele.
+
+### Ingestão agendada e backfill
+
+```bash
+# Descoberta sem downloads de dados nem alterações no banco:
+uv run --env-file .env nyc-mobility sync --start-period 2025-01 --dry-run
+
+# Processa o primeiro mês pendente; ampliar --max-periods para lotes maiores:
+uv run --env-file .env nyc-mobility sync --start-period 2025-01 --max-periods 1
+
+# Backfill limitado a um intervalo explícito:
+uv run --env-file .env nyc-mobility sync --start-period 2025-03 --end-period 2025-04 --max-periods 2
+```
+
+- A DAG `scheduled_pipeline` verifica diariamente às **09h UTC (06h de Brasília)**, sem catchup
+  do calendário e com uma execução ativa. Por padrão, examina janeiro/2025 até o último mês
+  completo e processa no máximo um mês por execução; mantém HVFHV opcional.
+- A disponibilidade vem dos links do [catálogo oficial da TLC](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page).
+  Um mês só é processado quando todas as modalidades solicitadas estão disponíveis. Os arquivos
+  já carregados são conferidos com HEAD e ETag/Last-Modified; a ingestão existente confirma hashes.
+  Links ausentes/HTTP 404 ficam aguardando publicação; 403, 429, 5xx e erros de rede são falhas.
+- Reutiliza ingestão, clima, cadastro de zonas e build rastreado; sem novas versões e sem
+  publicação pendente, não refaz o dbt. Uma falha de ingestão interrompe a execução antes do build.
+  Falhas transitórias têm retries; erros de contrato/parâmetros e falhas de build/validação
+  falham sem retry imediato, como na DAG manual.
+- Limites podem ser definidos nos parâmetros da DAG ou em `NYC_MOBILITY_START_PERIOD` e
+  `NYC_MOBILITY_END_PERIOD` (fim vazio = último mês completo). `--include-hvfhv` habilita aplicativos.
+  A DAG manual `monthly_pipeline` continua disponível para diagnóstico e reprocessamento dirigido.
 
 ### Comparações
 

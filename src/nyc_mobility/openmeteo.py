@@ -9,7 +9,6 @@ são instantâneas. A competência é o mês local de NY, alinhada às corridas 
 import hashlib
 import json
 import urllib.parse
-from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from nyc_mobility.common import ContractError, period_bounds
@@ -36,10 +35,10 @@ def url(period: str) -> str:
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
         "start_date": start.date().isoformat(),
-        "end_date": (end - timedelta(days=1)).date().isoformat(),
+        "end_date": end.date().isoformat(),
         "hourly": ",".join(VARIABLES),
         "models": "era5",
-        "timezone": TIMEZONE,  # define os limites dos dias locais
+        "timezone": "GMT",  # dias UTC completos; validate recorta o mês local, inclusive DST
         "timeformat": "unixtime",  # timestamps inequívocos em UTC
     }
     return f"https://archive-api.open-meteo.com/v1/archive?{urllib.parse.urlencode(query)}"
@@ -78,6 +77,16 @@ def validate(data: dict, period: str) -> dict:
     if not all(isinstance(t, int) for t in times):
         raise ContractError("hourly.time deve conter timestamps Unix inteiros")
     expected = expected_hours(period)
+    # A API aplica um offset fixo ao intervalo; dias UTC evitam perda de horas no DST.
+    lower = expected[0] // 86400 * 86400
+    upper = (expected[-1] // 86400 + 1) * 86400
+    if any(b - a != 3600 for a, b in zip(times, times[1:], strict=False)) or any(
+        t < lower or t >= upper for t in times
+    ):
+        raise ContractError("Série horária fora dos dias solicitados, descontínua ou duplicada")
+    indices = [i for i, t in enumerate(times) if expected[0] <= t <= expected[-1]]
+    hourly = {key: [hourly[key][i] for i in indices] for key in ["time", *VARIABLES]}
+    times = hourly["time"]
     if times != expected:
         missing_hours = len(set(expected) - set(times))
         extra_hours = len(set(times) - set(expected))

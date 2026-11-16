@@ -1,8 +1,8 @@
 """Página 2 — Mobilidade e clima: como chuva, neve e temperatura mudam demanda, duração,
 distância, velocidade e valor das corridas.
 
-Uma consulta traz, por hora, as somas filtradas de analytics.trip_demand_hourly (aceita os
-filtros de zona e modalidade) e o clima da cidade (analytics.trip_weather_hourly, ponto único).
+Uma consulta traz, por hora, as somas filtradas de serving.trip_demand_hourly (aceita os
+filtros de zona e modalidade) e o clima da cidade (serving.trip_weather_hourly, ponto único).
 O restante é agregação em Python sobre no máximo alguns milhares de horas.
 
 Comparação justa: chove mais de dia, quando há mais corridas e mais trânsito. Cada métrica é
@@ -23,7 +23,7 @@ from dash import Input, Output, callback, html
 from plotly.subplots import make_subplots
 
 from dashboard import coverage, theme
-from dashboard.db import query
+from dashboard.db import query, snapshot
 from dashboard.mobility import SOURCE, WHERE, params
 
 DRY, RAIN, SNOW = "Seco", "Chuva", "Neve"
@@ -70,7 +70,7 @@ def load_hours(p: dict) -> list[dict]:
                    coalesce(demand.duration_min_sum, 0) AS duration_min_sum,
                    coalesce(demand.distance_miles_sum, 0) AS distance_miles_sum,
                    coalesce(demand.amount_sum, 0) AS amount_sum
-            FROM analytics.trip_weather_hourly AS w
+            FROM serving.trip_weather_hourly AS w
             LEFT JOIN demand USING (hour_utc)
             WHERE w.hour_local >= %(start)s AND w.hour_local < %(end)s
               AND w.period IN ({coverage.WEATHER_PERIODS})
@@ -321,6 +321,7 @@ def layout() -> list:
     Input("f-zones", "value"),
     Input("f-service", "value"),
 )
+@snapshot()
 def update(start, end, borough, zones, services):
     if not start or not end:
         return [], theme.empty(), theme.empty(), theme.empty(), []

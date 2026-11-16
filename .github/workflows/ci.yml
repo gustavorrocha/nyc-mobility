@@ -71,5 +71,10 @@ jobs:
           t = d.get_task('dbt_build')
           assert t.bash_command.startswith('nyc-mobility build --period')
           assert t.env == {'NYC_PERIOD': '{{ params.period }}'} and t.append_env
+          scheduled = b.dags['scheduled_pipeline']
+          assert scheduled.schedule == '0 9 * * *' and scheduled.max_active_runs == 1
+          assert set(scheduled.task_ids) == {'sync'}
+          assert scheduled.get_task('sync').retries == 2
+          assert scheduled.params['max_periods'] == 1
           print('monthly_pipeline OK')
           "

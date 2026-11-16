@@ -15,6 +15,7 @@ def test_build_records_outcome_and_each_node(
     engine, monkeypatch, returncode, node_status, expected
 ):
     monkeypatch.setenv("POSTGRES_DB", engine.url.database)
+    monkeypatch.setattr(runner, "publish", lambda *args: None)
 
     def dbt(cmd, **kwargs):
         from pathlib import Path

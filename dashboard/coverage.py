@@ -14,7 +14,7 @@ LABELS = {
 
 # Comparações e totais usam somente meses cobertos em todas as modalidades selecionadas.
 COVERED_PERIODS = """
-    SELECT period FROM analytics.data_coverage
+    SELECT period FROM serving.data_coverage
     WHERE service_type = ANY(%(services)s)
       AND period >= to_char(%(start)s::date, 'YYYY-MM')
       AND period <= to_char(%(end)s::date - 1, 'YYYY-MM')
@@ -37,7 +37,7 @@ def load(p: dict, *, weather: bool = False) -> list[dict]:
                date_trunc('month', %(end)s::timestamp - interval '1 day'),
                interval '1 month') AS m
            CROSS JOIN unnest(%(services)s::text[]) AS s
-           LEFT JOIN analytics.data_coverage AS c
+           LEFT JOIN serving.data_coverage AS c
                ON c.period = to_char(m, 'YYYY-MM') AND c.service_type = s
            ORDER BY 1, 2""",
         {**p, "weather": weather},

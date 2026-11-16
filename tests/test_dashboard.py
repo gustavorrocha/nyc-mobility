@@ -104,6 +104,14 @@ def test_layout_reports_database_unavailable(monkeypatch):
     assert tree.children[0].children == "Banco de dados indisponível"
 
 
+def test_layout_explains_missing_first_publication(monkeypatch):
+    def unavailable():
+        raise RuntimeError("Dados ainda não publicados. Execute nyc-mobility build.")
+
+    monkeypatch.setattr(dash_app, "filter_options", unavailable)
+    assert dash_app.layout().children[0].children == "Aguardando primeira publicação"
+
+
 def test_initial_selection_only_includes_modalities_with_available_data(monkeypatch):
     monkeypatch.setattr(
         dash_app,

@@ -5,7 +5,7 @@ from datetime import timedelta
 from dash import Input, Output, callback, html
 
 from dashboard import coverage, mobility, theme
-from dashboard.db import query
+from dashboard.db import query, snapshot
 
 SERVICES = {
     "yellow": ("Yellow Taxi", theme.BLUE, "solid"),
@@ -227,6 +227,7 @@ def period_layout() -> list:
     Input("f-zones", "value"),
     Input("f-service", "value"),
 )
+@snapshot()
 def update_services(start, end, borough, zones, services):
     if not start or not end or not services:
         return theme.empty(), theme.empty(), []
@@ -256,6 +257,7 @@ def update_services(start, end, borough, zones, services):
     Input("f-zones", "value"),
     Input("f-service", "value"),
 )
+@snapshot()
 def update_periods(start, end, borough, zones, services):
     if not start or not end or not services:
         return "Selecione um período e uma modalidade para comparar.", []
