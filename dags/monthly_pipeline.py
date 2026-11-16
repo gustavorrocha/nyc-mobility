@@ -68,7 +68,13 @@ with DAG(
 
     # Só roda com as três fontes concluídas (succeeded ou skipped). Sem retry: falhas de modelo
     # ou de teste são determinísticas; reexecutar só o dbt = "Clear" nesta tarefa.
-    dbt_build = BashOperator(task_id="dbt_build", bash_command="dbt build", retries=0)
+    dbt_build = BashOperator(
+        task_id="dbt_build",
+        bash_command='nyc-mobility build --period "$NYC_PERIOD"',
+        env={"NYC_PERIOD": "{{ params.period }}"},
+        append_env=True,
+        retries=0,
+    )
 
     @task
     def summary(*results: dict) -> dict:

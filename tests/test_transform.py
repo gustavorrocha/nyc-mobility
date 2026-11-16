@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from test_weather_zones import weather_json, zones_csv
 
 from dashboard import climate, coverage, mobility, pipeline
+from nyc_mobility.build import build as tracked_build
 from nyc_mobility.ingest import ingest
 
 DBT_DIR = Path(__file__).parents[1] / "dbt"
@@ -326,3 +327,92 @@ def test_implausible_metrics_count_as_demand_but_not_in_averages(
         "SELECT trip_count, measured_trip_count, duration_min_sum, distance_miles_sum, amount_sum "
         "FROM analytics.trip_demand_hourly WHERE period = '2024-06'",
     ) == [(5, 1, 20.0, 2.0, 20.0)]
+
+
+def test_tracked_build_records_real_dbt_success_and_failed_test(engine, monkeypatch, tmp_path):
+    monkeypatch.setenv("POSTGRES_DB", engine.url.database)
+    project = tmp_path / "dbt"
+    shutil.copytree(DBT_DIR, project, ignore=shutil.ignore_patterns("target", "logs"))
+    monkeypatch.setenv("DBT_PROJECT_DIR", str(project))
+    monkeypatch.setenv("DBT_PROFILES_DIR", str(project))
+    succeeded = tracked_build(period="2024-02", full_refresh=True)
+    assert succeeded["status"] == "succeeded"
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                sa.text("SELECT * FROM metadata.analytics_runs WHERE run_id = :id"),
+                {"id": succeeded["run_id"]},
+            )
+            .mappings()
+            .one()
+        )
+    assert "2024-02" in row["validated_periods"]
+    assert "tlc.yellow@2024-02" in row["input_versions"]
+    assert any(r["unique_id"].startswith("model.") for r in row["node_results"])
+    assert any(r["unique_id"].startswith("test.") for r in row["node_results"])
+
+    project.joinpath("tests", "deliberate_failure.sql").write_text("select 1", encoding="utf-8")
+    failed = tracked_build(period="2024-02")
+    assert failed["status"] == "failed" and failed["returncode"] != 0
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                sa.text("SELECT * FROM metadata.analytics_runs WHERE run_id = :id"),
+                {"id": failed["run_id"]},
+            )
+            .mappings()
+            .one()
+        )
+    assert row["validated_periods"] == []
+    assert any(
+        "deliberate_failure" in r["unique_id"] and r["status"] == "fail"
+        for r in row["node_results"]
+    )
+    with engine.connect() as conn:
+        conn.execute(sa.text("SET ROLE dashboard_reader"))
+        assert conn.scalar(sa.text("SELECT count(*) FROM metadata.analytics_runs")) >= 2
+
+
+def test_dashboard_http_callbacks_use_coverage_and_build_history(engine, monkeypatch):
+    from dashboard.app import app
+
+    monkeypatch.setenv("POSTGRES_DB", engine.url.database)
+    monkeypatch.setenv("DASHBOARD_DB_USER", engine.url.username)
+    monkeypatch.setenv("DASHBOARD_DB_PASSWORD", engine.url.password)
+    client = app.server.test_client()
+    assert client.get("/_dash-layout").status_code == 200
+    values = {
+        ("f-period", "start_date"): "2024-02-01",
+        ("f-period", "end_date"): "2024-04-01",
+        ("f-borough", "value"): None,
+        ("f-zones", "value"): [],
+        ("f-service", "value"): ["yellow"],
+        ("url", "pathname"): "/pipeline",
+    }
+    for component in ("m-kpis", "c-cards", "p-kpis"):
+        key = next(k for k in app.callback_map if component in k)
+        callback = app.callback_map[key]
+        response = client.post(
+            "/_dash-update-component",
+            json={
+                "output": key,
+                "outputs": [
+                    {"id": o.component_id, "property": o.component_property}
+                    for o in callback["output"]
+                ],
+                "inputs": [
+                    {**i, "value": values[(i["id"], i["property"])]} for i in callback["inputs"]
+                ],
+                "state": [],
+                "changedPropIds": ["f-period.start_date"],
+            },
+        )
+        assert response.status_code == 200, response.get_data(as_text=True)
+        payload = response.get_json()["response"]
+        if component == "p-kpis":
+            assert "p-builds-body" in payload and "deliberate_failure" in response.get_data(
+                as_text=True
+            )
+        else:
+            prefix = component[0]
+            assert f"{prefix}-coverage" in payload

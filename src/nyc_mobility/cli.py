@@ -3,6 +3,7 @@ import json
 import sys
 
 from nyc_mobility import __version__, db
+from nyc_mobility.build import build
 from nyc_mobility.common import ContractError
 from nyc_mobility.ingest import ADAPTERS, ingest
 
@@ -20,6 +21,16 @@ def main(argv: list[str] | None = None) -> int:
     db_actions.add_parser("upgrade", help="Aplica migrações Alembic")
     db_actions.add_parser("check", help="Verifica conexão e schemas")
 
+    build_parser = commands.add_parser(
+        "build", help="Executa dbt build com rastreamento em metadata"
+    )
+    build_parser.add_argument(
+        "--period", help="Competência solicitada (o dbt verifica o projeto inteiro)"
+    )
+    build_parser.add_argument(
+        "--full-refresh", action="store_true", help="Reconstrói todos os modelos"
+    )
+
     ingest_parser = commands.add_parser("ingest", help="Ingere um dataset")
     ingest_parser.add_argument("--dataset", required=True, choices=sorted(ADAPTERS))
     ingest_parser.add_argument(
@@ -29,6 +40,14 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="Recarrega mesmo se o hash já estiver publicado"
     )
     args = parser.parse_args(argv)
+
+    if args.command == "build":
+        try:
+            result = build(args.period, full_refresh=args.full_refresh)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, ensure_ascii=False))
+        return result["returncode"]
 
     if args.command == "ingest":
         if ADAPTERS[args.dataset].PERIODIC != (args.period is not None):

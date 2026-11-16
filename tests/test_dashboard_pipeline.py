@@ -99,3 +99,27 @@ def test_figures_and_tables_render():
     assert first_row[1].className == "left tone-good"  # status com cor + ícone no texto
     assert pipeline.timeline_figure([]).layout.annotations
     assert pipeline.quality_figure(QUALITY[:1]).layout.annotations
+
+
+def test_build_table_separates_failed_validation_from_ingestion():
+    builds = [
+        {
+            "run_id": 1,
+            "period": "2025-01",
+            "status": "failed",
+            "started_at": T0,
+            "finished_at": T0 + timedelta(seconds=5),
+            "seconds": 5.0,
+            "validated_periods": [],
+            "error": "Teste falhou",
+            "node_results": [
+                {"unique_id": "model.project.trips", "status": "success", "message": None},
+                {"unique_id": "test.project.check", "status": "fail", "message": "1 registro"},
+            ],
+        }
+    ]
+    row = pipeline.build_rows(builds)[0]
+    assert row["status"] == "✕ Falha" and row["validated"] == "—"
+    assert row["nodes"] == "1 / 1"
+    assert "test.project.check: fail" in row["message"]
+    assert "1 registro" in row["message"]

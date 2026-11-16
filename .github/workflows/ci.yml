@@ -67,5 +67,8 @@ jobs:
           assert up['dbt_build'] == ingest, up
           assert 'dbt_build' in up['summary'], up
           assert d.max_active_runs == 1 and d.schedule is None
+          t = d.get_task('dbt_build')
+          assert t.bash_command.startswith('nyc-mobility build --period')
+          assert t.env == {'NYC_PERIOD': '{{ params.period }}'} and t.append_env
           print('monthly_pipeline OK')
           "
