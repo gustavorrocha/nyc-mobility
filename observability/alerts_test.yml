@@ -2,6 +2,33 @@ rule_files:
   - alerts.yml
 evaluation_interval: 15s
 tests:
+  - name: build com falha seguido de sucesso
+    interval: 15s
+    input_series:
+      - series: 'nyc_mobility_build_success{job="nyc_mobility",instance="metrics-exporter:9101"}'
+        values: '0+0x4 1+0x2'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: UltimoBuildFalhou
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: UltimoBuildFalhou
+        exp_alerts:
+          - exp_labels:
+              job: nyc_mobility
+              instance: metrics-exporter:9101
+              severity: warning
+            exp_annotations:
+              summary: "O último build concluído falhou"
+              description: "Confira a execução e os resultados dbt no Pipeline Health; corrija a falha e reexecute o build."
+      - eval_time: 1m15s
+        alertname: UltimoBuildFalhou
+        exp_alerts: []
+  - name: sem build não presume falha
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: UltimoBuildFalhou
+        exp_alerts: []
   - name: falha persistente e recuperação
     interval: 15s
     input_series:

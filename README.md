@@ -140,6 +140,36 @@ encerra o alerta e espera o e-mail `[RESOLVED]`. A recuperação pode demorar at
 minutos por causa de `group_interval`; ambas as mensagens ficam no Mailpit. O teste não
 verifica a regra de coleta do Prometheus, que tem seus próprios testes com `promtool`.
 
+### Monitorar builds dbt
+
+O exportador também consulta o último build concluído em `metadata.analytics_runs`:
+
+| Métrica | Significado |
+|---|---|
+| `nyc_mobility_build_success` | `1` = sucesso; `0` = falha |
+| `nyc_mobility_build_duration_seconds` | Duração do mesmo build, em segundos |
+
+São gauges do último resultado, não contadores ou histogramas de todas as execuções.
+Sem build concluído, as métricas não têm amostras e os painéis mostram “Sem build concluido”.
+Um build em andamento preserva o último resultado concluído. O Grafana mostra resultado e
+duração, enquanto a publicação validada continua sendo monitorada separadamente.
+
+O alerta `UltimoBuildFalhou` dispara após um minuto observando resultado de falha. Esse
+atraso é didático; não tenta reexecutar o build. Consulte o Pipeline Health para identificar
+a falha e os resultados dbt; corrija a causa e execute novamente o build. O alerta se resolve
+quando um build posterior conclui com sucesso. Se o exportador cair, investigue primeiro o
+alerta de coleta, pois o resultado do build deixa de ser observado.
+
+Para aplicar a atualização no ambiente já configurado:
+
+```bash
+docker compose --profile observability up -d --build --no-deps metrics-exporter
+docker compose --profile observability restart prometheus
+```
+
+Os testes em `tests/test_metrics.py` cobrem sucesso, falha, ausência de histórico e erro
+de banco. Os testes do `promtool` cobrem o período pendente, disparo e recuperação do alerta.
+
 ## Comandos de validação
 
 ```bash
