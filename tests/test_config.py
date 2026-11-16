@@ -39,3 +39,19 @@ def test_cli_contract_error_has_dedicated_exit_code(monkeypatch, capsys):
     monkeypatch.setattr(cli, "ingest", broken)
     assert main(["ingest", "--dataset", "tlc.yellow", "--period", "2025-01"]) == 3
     assert "Erro de contrato: coluna obrigatória ausente" in capsys.readouterr().err
+
+
+def test_sync_contract_error_has_dedicated_exit_code(monkeypatch, capsys):
+    def broken(*args, **kwargs):
+        raise ContractError("coluna obrigatória ausente")
+
+    monkeypatch.setattr(cli, "synchronize", broken)
+    assert main(["sync", "--start-period", "2025-01"]) == 3
+    assert "Erro de contrato" in capsys.readouterr().err
+
+
+def test_sync_failed_build_has_a_non_retryable_exit_code(monkeypatch):
+    monkeypatch.setattr(
+        cli, "synchronize", lambda *a, **kw: {"build": {"status": "failed", "returncode": 1}}
+    )
+    assert main(["sync", "--start-period", "2025-01"]) == 4
