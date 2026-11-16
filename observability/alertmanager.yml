@@ -7,3 +7,9 @@ route:
 
 receivers:
   - name: local
+    email_configs:
+      - to: operador@example.test
+        from: alertmanager@example.test
+        smarthost: mailpit:1025
+        require_tls: false
+        send_resolved: true

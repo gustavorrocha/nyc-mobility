@@ -30,6 +30,13 @@ x-airflow-common: &airflow-common
       condition: service_healthy
 
 services:
+  mailpit:
+    image: axllent/mailpit:v1.27.4
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:8025:8025"
+    restart: unless-stopped
+
   alertmanager:
     image: prom/alertmanager:v0.28.1
     profiles: ["observability"]

@@ -106,13 +106,28 @@ docker compose --profile observability restart prometheus
 
 O Prometheus avalia as regras e envia alertas ativos ao Alertmanager. Ele os agrupa por
 `alertname` e permite consultá-los ou silenciá-los em <http://127.0.0.1:9093>. O volume
-`alertmanager-data` preserva os silêncios entre reinícios. O receptor `local` é um receptor
-sem integração: **nenhuma notificação externa é enviada**. As durações de agrupamento estão
-em `observability/alertmanager.yml` e passam a controlar notificações quando houver um destino.
+`alertmanager-data` preserva os silêncios entre reinícios. O receptor `local` envia e-mails
+para o Mailpit, uma caixa SMTP de teste dentro do Compose. As durações de agrupamento estão
+em `observability/alertmanager.yml`.
 
 Para investigar o encaminhamento, confira os serviços com
 `docker compose ps prometheus alertmanager` e o campo “Alertmanagers” em
 <http://127.0.0.1:9090/status>. Para parar o serviço: `docker compose stop alertmanager`.
+
+### Caixa de notificações local
+
+```bash
+docker compose --profile observability up -d mailpit alertmanager
+docker compose --profile observability restart alertmanager
+```
+
+Abra <http://127.0.0.1:8025> para ver as mensagens de alerta e de recuperação. O
+Alertmanager envia por SMTP para `mailpit:1025` na rede interna; a porta SMTP não é
+publicada no host. Os endereços `example.test` são fictícios e o Mailpit captura os
+e-mails localmente, sem encaminhá-los. A conexão SMTP sem TLS é apenas para este ambiente
+de teste. As mensagens ficam em memória e são perdidas ao recriar ou reiniciar o Mailpit.
+O agrupamento aguarda 30 segundos antes da primeira notificação. Para parar a caixa:
+`docker compose stop mailpit`.
 
 ## Comandos de validação
 
