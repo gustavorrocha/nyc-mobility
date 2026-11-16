@@ -1,4 +1,6 @@
-"""Comparações entre modalidades, sobre os mesmos filtros de mobilidade."""
+"""Comparações entre modalidades e entre intervalos, sobre os mesmos filtros de mobilidade."""
+
+from datetime import timedelta
 
 from dash import Input, Output, callback, html
 
@@ -59,6 +61,14 @@ def load_service_trend(p: dict, grain: str) -> list[dict]:
         ORDER BY array_position(%(services)s::text[], s.service_type), calendar.t""",
         {**p, "grain": grain, "step": f"1 {grain}"},
     )
+
+
+def previous_period(p: dict) -> dict:
+    return {**p, "start": p["start"] - (p["end"] - p["start"]), "end": p["start"]}
+
+
+def relative_change(current, previous):
+    return current / previous - 1 if current is not None and previous else None
 
 
 def format_metric(key: str, value) -> str:
@@ -130,6 +140,20 @@ def service_rows(rows: list[dict]) -> list[dict]:
     return result
 
 
+def period_rows(current: dict, previous: dict, *, complete: bool) -> list[dict]:
+    return [
+        {
+            "metric": label,
+            "current": format_metric(key, current[key]),
+            "previous": format_metric(key, previous[key]),
+            "change": theme.percent(relative_change(current[key], previous[key]))
+            if complete
+            else "—",
+        }
+        for key, (label, _, _) in METRICS.items()
+    ]
+
+
 def table(columns: list[tuple[str, str]], rows: list[dict]):
     return html.Div(
         html.Table(
@@ -174,6 +198,25 @@ def service_layout() -> list:
     ]
 
 
+def period_layout() -> list:
+    return [
+        html.Div(
+            [
+                html.H3("Comparação com o período anterior"),
+                html.Div(id="t-coverage", role="status", className="chart-note"),
+                html.Div(id="t-metrics"),
+                html.P(
+                    "Variação = atual / anterior − 1. Sem variação quando a base anterior é zero "
+                    "ou a métrica não está disponível. As médias usam as corridas com métricas "
+                    "disponíveis e plausíveis em cada intervalo.",
+                    className="chart-note",
+                ),
+            ],
+            className="card comparison-table",
+        ),
+    ]
+
+
 @callback(
     Output("s-trend", "figure"),
     Output("s-share", "figure"),
@@ -201,4 +244,43 @@ def update_services(start, end, borough, zones, services):
         service_trend_figure(load_service_trend(p, grain), grain),
         share_figure(rows),
         table(columns, service_rows(rows)),
+    )
+
+
+@callback(
+    Output("t-coverage", "children"),
+    Output("t-metrics", "children"),
+    Input("f-period", "start_date"),
+    Input("f-period", "end_date"),
+    Input("f-borough", "value"),
+    Input("f-zones", "value"),
+    Input("f-service", "value"),
+)
+def update_periods(start, end, borough, zones, services):
+    if not start or not end or not services:
+        return "Selecione um período e uma modalidade para comparar.", []
+    p = mobility.params(start, end, borough, zones, services)
+    previous = previous_period(p)
+    n_days = (p["end"] - p["start"]).days
+    current_days = len(coverage.covered_days(p, coverage.load(p)))
+    previous_days = len(coverage.covered_days(previous, coverage.load(previous)))
+    complete = n_days > 0 and current_days == previous_days == n_days
+
+    def label(interval):
+        return f"{interval['start']:%d/%m/%Y} a {interval['end'] - timedelta(days=1):%d/%m/%Y}"
+
+    note = (
+        f"Atual: {label(p)} ({current_days}/{n_days} dias cobertos). "
+        f"Anterior: {label(previous)} ({previous_days}/{n_days} dias cobertos). "
+    )
+    if not complete:
+        note += "Cobertura incompleta: valores são parciais e as variações estão ocultas."
+    columns = [
+        ("metric", "Indicador"),
+        ("current", "Atual"),
+        ("previous", "Anterior"),
+        ("change", "Variação"),
+    ]
+    return note, table(
+        columns, period_rows(mobility.load_kpis(p), mobility.load_kpis(previous), complete=complete)
     )

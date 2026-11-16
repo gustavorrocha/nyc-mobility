@@ -185,6 +185,10 @@ por outra migração com o mesmo identificador.
 - As séries e participações usam somente meses cobertos em **todas** as modalidades
   selecionadas, respeitando distrito e zonas. Participação é relativa à seleção, não ao mercado
   inteiro. A seleção inicial inclui apenas modalidades que já têm dados disponíveis.
+- A comparação temporal usa o intervalo imediatamente anterior com o **mesmo número de dias**,
+  mantendo os filtros (ex.: 01–31/01/2025 compara com 01–31/12/2024). Os dois intervalos e
+  seus dias cobertos são exibidos. Com cobertura incompleta, os valores são parciais e as
+  variações ficam ocultas; base anterior zero ou métrica ausente também não produz variação.
 - Para usar esta versão, execute `nyc-mobility build` e reconstrua o dashboard. A incorporação
   das modalidades não baixa competências automaticamente; use a CLI ou a DAG para carregá-las.
 

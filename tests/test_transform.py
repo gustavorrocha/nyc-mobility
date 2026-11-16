@@ -389,7 +389,7 @@ def test_dashboard_http_callbacks_use_coverage_and_build_history(engine, monkeyp
         ("f-service", "value"): ["yellow"],
         ("url", "pathname"): "/pipeline",
     }
-    for component in ("m-kpis", "c-cards", "p-kpis", "s-trend"):
+    for component in ("m-kpis", "c-cards", "p-kpis", "s-trend", "t-coverage"):
         key = next(k for k in app.callback_map if component in k)
         callback = app.callback_map[key]
         response = client.post(
@@ -418,6 +418,8 @@ def test_dashboard_http_callbacks_use_coverage_and_build_history(engine, monkeyp
             assert f"{prefix}-coverage" in payload
         elif component == "s-trend":
             assert "s-share" in payload and "s-metrics" in payload
+        else:
+            assert "t-metrics" in payload
 
 
 def test_other_trip_types_and_comparisons(
@@ -475,3 +477,6 @@ def test_other_trip_types_and_comparisons(
     september = mobility.params("2024-09-01", "2024-09-30", None, None, ["yellow"])
     assert comparisons.load_services(september)[0]["trips"] == 0
     assert all(r["trips"] == 0 for r in comparisons.load_service_trend(september, "day"))
+    note, table = comparisons.update_periods("2024-08-01", "2024-08-31", None, None, services)
+    assert "Cobertura incompleta" in note
+    assert all(row.children[-1].children == "—" for row in table.children.children[1].children)

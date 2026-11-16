@@ -11,7 +11,7 @@ PAGES = {
     "/": (
         "Mobilidade urbana",
         "Demanda, distâncias, durações, tarifas e zonas de embarque das corridas válidas.",
-        lambda: [*mobility.layout(), *comparisons.service_layout()],
+        lambda: [*mobility.layout(), *comparisons.service_layout(), *comparisons.period_layout()],
     ),
     "/clima": (
         "Mobilidade e clima",
