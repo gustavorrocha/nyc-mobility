@@ -1,6 +1,6 @@
 """Página 1 — Mobilidade urbana: KPIs, demanda no tempo, heatmap, mapa e ranking de zonas.
 
-Fonte: analytics.trip_demand_hourly (corridas válidas por hora local × modalidade × zona de
+Fonte: serving.trip_demand_hourly (corridas válidas por hora local × modalidade × zona de
 embarque). As médias de distância e duração são ponderadas pelo número de corridas.
 """
 
@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from dash import Input, Output, State, callback, html, no_update
 
 from dashboard import coverage, theme
-from dashboard.db import query
+from dashboard.db import query, snapshot
 
 WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 HOURLY_MAX_DAYS = 7  # até 7 dias, demanda por hora; acima, por dia
@@ -21,7 +21,7 @@ NYC_CENTER = {"lat": 40.70, "lon": -73.94}
 
 # FHV pode não informar zona: essas corridas contam nos totais, mas não no mapa/ranking.
 SOURCE = (
-    "analytics.trip_demand_hourly AS d LEFT JOIN core.zones AS z ON z.zone_id = d.pickup_zone_id"
+    "serving.trip_demand_hourly AS d LEFT JOIN serving.zones AS z ON z.zone_id = d.pickup_zone_id"
 )
 KNOWN_ZONE = "d.pickup_zone_id IS NOT NULL"
 WHERE = f"""
@@ -306,6 +306,7 @@ def layout() -> list:
     Input("f-zones", "value"),
     Input("f-service", "value"),
 )
+@snapshot()
 def update(start, end, borough, zones, services):
     if not start or not end:
         return [], theme.empty(), theme.empty(), theme.empty(), []
@@ -330,6 +331,7 @@ def update(start, end, borough, zones, services):
     Input("f-zones", "value"),
     Input("f-service", "value"),
 )
+@snapshot()
 def update_map(start, end, borough, zones, services):
     if not start or not end:
         return theme.empty()

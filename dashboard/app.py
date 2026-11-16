@@ -1,10 +1,12 @@
 """NYC Mobility Explorer: cabeçalho, navegação, filtros globais e rotas das páginas."""
 
+from datetime import UTC
+
 import psycopg
 from dash import Dash, Input, Output, State, dcc, html
 
 from dashboard import climate, comparisons, mobility, pipeline
-from dashboard.db import query
+from dashboard.db import query, snapshot
 
 # Rota -> (título, descrição, conteúdo da página).
 PAGES = {
@@ -32,21 +34,23 @@ NO_FILTERS = {"/pipeline"}  # filtros globais são de mobilidade, não de metada
 app = Dash(__name__, title="NYC Mobility Explorer", suppress_callback_exceptions=True)
 
 
+@snapshot()
 def filter_options() -> dict:
     """Valores dos filtros globais, lidos do banco a cada carregamento de página."""
     period = query(
         "SELECT min(to_date(period, 'YYYY-MM')) AS first_day, "
-        "(max(to_date(period, 'YYYY-MM')) + interval '1 month - 1 day')::date AS last_day "
-        "FROM analytics.data_coverage"
+        "(max(to_date(period, 'YYYY-MM')) + interval '1 month - 1 day')::date AS last_day, "
+        "(SELECT published_at FROM metadata.analytics_publication) AS published_at "
+        "FROM serving.data_coverage"
     )[0]
     zones = query(
-        "SELECT zone_id, zone, borough FROM core.zones "
+        "SELECT zone_id, zone, borough FROM serving.zones "
         "WHERE zone IS NOT NULL AND borough IS NOT NULL ORDER BY borough, zone"
     )
     services = query(
-        "SELECT s.service_type, s.description, EXISTS (SELECT FROM analytics.data_coverage c "
+        "SELECT s.service_type, s.description, EXISTS (SELECT FROM serving.data_coverage c "
         "WHERE c.service_type = s.service_type AND c.status = 'available') AS available "
-        "FROM core.service_types s ORDER BY 1"
+        "FROM serving.service_types s ORDER BY 1"
     )
     return {**period, "zones": zones, "services": services}
 
@@ -62,7 +66,11 @@ def layout() -> html.Div:
         return html.Main(
             className="page",
             children=[
-                html.H2("Banco de dados indisponível"),
+                html.H2(
+                    "Aguardando primeira publicação"
+                    if str(exc).startswith("Dados ainda não publicados")
+                    else "Banco de dados indisponível"
+                ),
                 html.P(str(exc).splitlines()[0], className="lead"),
             ],
         )
@@ -81,6 +89,14 @@ def layout() -> html.Div:
                         [
                             html.H1("NYC Mobility Explorer"),
                             html.P("Táxis da TLC e clima horário da Open-Meteo"),
+                            html.P(
+                                "Dados validados em "
+                                + opts["published_at"]
+                                .astimezone(UTC)
+                                .strftime("%d/%m/%Y %H:%M UTC")
+                                if opts.get("published_at")
+                                else ""
+                            ),
                         ],
                         className="brand",
                     ),

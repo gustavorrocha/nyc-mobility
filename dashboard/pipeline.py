@@ -58,10 +58,13 @@ def load_runs() -> list[dict]:
 
 def load_builds() -> list[dict]:
     return query(
-        """SELECT run_id, period, status, started_at, finished_at, validated_periods,
+        """SELECT r.run_id, period, status, started_at, finished_at, validated_periods,
                   node_results, error,
-                  extract(epoch FROM finished_at - started_at)::float8 AS seconds
-           FROM metadata.analytics_runs ORDER BY run_id DESC LIMIT 20"""
+                  extract(epoch FROM finished_at - started_at)::float8 AS seconds,
+                  p.run_id IS NOT NULL AS published
+           FROM metadata.analytics_runs AS r
+           LEFT JOIN metadata.analytics_publication AS p ON p.run_id = r.run_id
+           ORDER BY r.run_id DESC LIMIT 20"""
     )
 
 
@@ -340,6 +343,7 @@ BUILD_COLUMNS = [
     ("status", "Status dbt"),
     ("period", "Solicitação"),
     ("validated", "Competências validadas"),
+    ("publication", "Consumo"),
     ("started", "Início"),
     ("finished", "Fim"),
     ("seconds", "Duração (s)"),
@@ -365,6 +369,7 @@ def build_rows(builds: list[dict]) -> list[dict]:
                 "status": f"{STATUS[b['status']][1]} {STATUS[b['status']][0]}",
                 "period": b["period"] or "Projeto inteiro",
                 "validated": ", ".join(b["validated_periods"]) or "—",
+                "publication": "✓ Atual" if b.get("published") else "—",
                 "started": _when(b["started_at"]),
                 "finished": _when(b["finished_at"]),
                 "seconds": "—" if b["seconds"] is None else theme.number(b["seconds"], 1),
@@ -441,7 +446,7 @@ def layout() -> list:
                     "Transformações e validações dbt",
                     "As 20 execuções rastreadas mais recentes. Sucesso na ingestão não garante "
                     "sucesso aqui. Competências validadas referem-se à versão da execução; "
-                    "a cobertura nas páginas analíticas indica se ela continua atual. "
+                    "o consumo mantém a última publicação aprovada até um novo build válido. "
                     "Execuções anteriores ao rastreamento não são inferidas como validadas.",
                     "p-builds-body",
                 ),
@@ -455,7 +460,9 @@ def layout() -> list:
                 _section(
                     "Conciliação por competência",
                     "Raw = linhas carregadas na versão publicada; core = todas as corridas no dbt; "
-                    "analytics = válidas. OK quando raw = core e core − inválidas = analytics.",
+                    "analytics = válidas. OK quando raw = core e core − inválidas = analytics. "
+                    "São modelos de trabalho: podem divergir durante cargas/builds, enquanto "
+                    "o dashboard mantém a última publicação validada.",
                     "p-recon-body",
                 ),
                 theme.chart_card(

@@ -1,8 +1,6 @@
 """dbt build ponta a ponta sobre fixtures: core preserva tudo, analytics usa só o válido."""
 
-import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -10,6 +8,7 @@ from test_weather_zones import weather_json, zones_csv
 
 from dashboard import climate, comparisons, coverage, mobility, pipeline
 from nyc_mobility.build import build as tracked_build
+from nyc_mobility.config import database_url
 from nyc_mobility.ingest import ingest
 
 DBT_DIR = Path(__file__).parents[1] / "dbt"
@@ -25,11 +24,15 @@ INCREMENTAL = ("trips", "weather_hourly", "trip_demand_hourly", "trip_weather_ho
 
 def dbt_build(*args):
     """Roda `dbt build` e devolve as linhas inseridas por modelo incremental."""
-    subprocess.run(
-        [shutil.which("dbt"), "build", "--project-dir", DBT_DIR, "--profiles-dir", DBT_DIR, *args],
-        check=True,
-    )
-    results = json.loads((DBT_DIR / "target" / "run_results.json").read_text(encoding="utf-8"))
+    result = tracked_build(full_refresh="--full-refresh" in args)
+    assert result["status"] == "succeeded", result
+    with sa.create_engine(database_url()).connect() as conn:
+        results = {
+            "results": conn.scalar(
+                sa.text("SELECT node_results FROM metadata.analytics_runs WHERE run_id = :id"),
+                {"id": result["run_id"]},
+            )
+        }
     affected = {
         r["unique_id"].rsplit(".", 1)[-1]: r["adapter_response"].get("rows_affected")
         for r in results["results"]
@@ -364,6 +367,11 @@ def test_tracked_build_records_real_dbt_success_and_failed_test(engine, monkeypa
             .one()
         )
     assert row["validated_periods"] == []
+    with engine.connect() as conn:
+        assert (
+            conn.scalar(sa.text("SELECT run_id FROM metadata.analytics_publication"))
+            == succeeded["run_id"]
+        )
     assert any(
         "deliberate_failure" in r["unique_id"] and r["status"] == "fail"
         for r in row["node_results"]

@@ -7,7 +7,7 @@ from psycopg import sql
 
 from nyc_mobility.config import database_url
 
-SCHEMAS = ("raw", "core", "analytics", "metadata")
+SCHEMAS = ("raw", "core", "analytics", "metadata", "serving")
 
 
 def _config() -> Config:

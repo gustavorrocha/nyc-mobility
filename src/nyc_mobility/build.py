@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 
 from nyc_mobility.common import period_bounds
 from nyc_mobility.config import database_url
+from nyc_mobility.publication import publish
 
 INPUT_VERSIONS = """
     SELECT coalesce(jsonb_object_agg(key, source_file_id), '{}') FROM (
@@ -31,7 +32,7 @@ def read_results(path: Path) -> list[dict]:
     results = json.loads(path.read_text(encoding="utf-8"))["results"]
     if not isinstance(results, list) or not results:
         raise ValueError("dbt não produziu resultados de modelos/testes")
-    fields = ("unique_id", "status", "message", "execution_time", "failures")
+    fields = ("unique_id", "status", "message", "execution_time", "failures", "adapter_response")
     if any(
         not isinstance(r, dict) or not r.get("unique_id") or not r.get("status") for r in results
     ):
@@ -110,12 +111,20 @@ def build(period: str | None = None, *, full_refresh: bool = False) -> dict:
 
 def _finish(conn, run_id: int, results: list[dict], error: str | None) -> str | None:
     if error is None:
+        # Impede publicação de novos insumos durante a verificação e cópia de consumo.
+        conn.execute(sa.text("LOCK TABLE metadata.ingestion_runs IN SHARE MODE"))
         original = conn.scalar(
             sa.text("SELECT input_versions FROM metadata.analytics_runs WHERE run_id = :id"),
             {"id": run_id},
         )
         if original != conn.scalar(sa.text(INPUT_VERSIONS)):
             error = "Os insumos mudaram durante o build; reexecute para validar a nova versão"
+    if error is None:
+        try:
+            publish(conn, run_id)
+        except Exception as exc:
+            conn.rollback()  # nenhuma tabela de consumo nem ponteiro muda parcialmente
+            error = f"Publicação falhou: {type(exc).__name__}: {exc}"
     periods = []
     if error is None and conn.scalar(sa.text("SELECT to_regclass('analytics.data_coverage')")):
         periods = list(

@@ -20,6 +20,7 @@ def test_upgrade_is_idempotent_and_creates_schemas(engine):
         "metadata.source_files",
         "metadata.ingestion_runs",
         "metadata.analytics_runs",
+        "metadata.analytics_publication",
         "raw.tlc_yellow_trips",
         "raw.tlc_taxi_zones",
         "raw.openmeteo_weather_hourly",
@@ -54,7 +55,7 @@ def test_migrations_are_reversible(engine, monkeypatch):
         db.upgrade()
         assert db.missing_schemas() == []
         with legacy.connect() as conn:
-            assert conn.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0006"
+            assert conn.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0007"
             assert conn.scalar(sa.text("SELECT to_regclass('metadata.analytics_runs')")) is not None
             assert conn.scalar(sa.text("SELECT to_regclass('raw.tlc_green_trips')")) is not None
         legacy.dispose()
