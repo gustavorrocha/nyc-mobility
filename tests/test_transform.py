@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from test_weather_zones import weather_json, zones_csv
 
-from dashboard import climate, mobility, pipeline
+from dashboard import climate, coverage, mobility, pipeline
 from nyc_mobility.ingest import ingest
 
 DBT_DIR = Path(__file__).parents[1] / "dbt"
@@ -132,8 +132,9 @@ def test_dashboard_mobility_queries(engine, monkeypatch):
     assert [(r["zone"], r["trips"], r["share"]) for r in mobility.load_ranking(p)] == [
         ("A", 4, 1.0)
     ]
-    for other in ({"borough": "Q"}, {"zones": [2]}, {"services": ["green"]}):
-        assert mobility.load_kpis({**p, **other})["trips"] is None
+    for other in ({"borough": "Q"}, {"zones": [2]}):
+        assert mobility.load_kpis({**p, **other})["trips"] == 0
+    assert mobility.load_kpis({**p, "services": ["green"]})["trips"] is None
     # Mapa: ignora o filtro de zonas (todas continuam clicáveis), mas respeita os demais.
     expected = [{"zone_id": 1, "zone": "A", "borough": "EWR", "trips": 4}]
     assert mobility.load_zone_trips({**p, "zones": [2]}) == expected
@@ -143,6 +144,20 @@ def test_dashboard_mobility_queries(engine, monkeypatch):
     hours = climate.load_hours(month)
     assert len(hours) == 696 and sum(h["trips"] for h in hours) == 4
     assert sum(h["trips"] for h in climate.load_hours({**month, "borough": "Q"})) == 0
+    # Março tem todas as corridas inválidas: cobertura existe e a demanda é realmente zero.
+    span = mobility.params("2024-02-01", "2024-04-01", None, None, ["yellow"])
+    assert coverage.load(span) == [
+        {"period": "2024-02", "service_type": "yellow", "status": "available"},
+        {"period": "2024-03", "service_type": "yellow", "status": "available"},
+        {"period": "2024-04", "service_type": "yellow", "status": "missing"},
+    ]
+    trend = mobility.load_trend(span, "day")
+    assert trend[-2]["trips"] == 0 and trend[-1]["trips"] is None
+    # Uma modalidade sem carga não produz zeros nem entra na análise de clima.
+    absent = {**month, "services": ["green"]}
+    assert all(r["trips"] is None for r in mobility.load_trend(absent, "day"))
+    assert climate.load_hours(absent) == []
+    assert coverage.load(span, weather=True)[1]["status"] == "missing"
 
 
 def test_dashboard_pipeline_queries(engine, monkeypatch):
@@ -200,12 +215,26 @@ def test_dbt_incremental_reprocesses_only_changed_periods(
     ingest(
         "tlc.yellow", "2024-03", url=yellow_parquet(tmp_path / "c" / "y.parquet", "2024-03", rows=3)
     )
+    with engine.connect() as conn:
+        assert (
+            conn.scalar(
+                sa.text("SELECT status FROM analytics.data_coverage WHERE period = '2024-03'")
+            )
+            == "pending"
+        )
     assert dbt_build() == {
         "trips": 3,
         "weather_hourly": 0,
         "trip_demand_hourly": 2,
         "trip_weather_hourly": 743,
     }
+    with engine.connect() as conn:
+        assert (
+            conn.scalar(
+                sa.text("SELECT status FROM analytics.data_coverage WHERE period = '2024-03'")
+            )
+            == "available"
+        )
     assert count("SELECT count(*) FROM core.trips WHERE period = '2024-02'") == 5
 
     # Nova versão do cadastro de zonas: todas as competências de viagens são reprocessadas.

@@ -22,7 +22,7 @@ from typing import NamedTuple
 from dash import Input, Output, callback, html
 from plotly.subplots import make_subplots
 
-from dashboard import theme
+from dashboard import coverage, theme
 from dashboard.db import query
 from dashboard.mobility import SOURCE, WHERE, params
 
@@ -73,6 +73,7 @@ def load_hours(p: dict) -> list[dict]:
             FROM analytics.trip_weather_hourly AS w
             LEFT JOIN demand USING (hour_utc)
             WHERE w.hour_local >= %(start)s AND w.hour_local < %(end)s
+              AND w.period IN ({coverage.WEATHER_PERIODS})
             ORDER BY w.hour_local""",
         p,
     )
@@ -271,6 +272,7 @@ def effects_figure(categories: list[str], series: list[tuple[str, list[dict]]]):
 
 def layout() -> list:
     return [
+        html.Div(id="c-coverage"),
         html.Div(id="c-cards", className="kpis"),
         html.P(
             "Efeito = variação vs. o esperado pelas horas secas com o mesmo dia da semana e a "
@@ -312,6 +314,7 @@ def layout() -> list:
     Output("c-intensity", "figure"),
     Output("c-dayparts", "figure"),
     Output("c-temperature", "figure"),
+    Output("c-coverage", "children"),
     Input("f-period", "start_date"),
     Input("f-period", "end_date"),
     Input("f-borough", "value"),
@@ -320,8 +323,9 @@ def layout() -> list:
 )
 def update(start, end, borough, zones, services):
     if not start or not end:
-        return [], theme.empty(), theme.empty(), theme.empty()
-    hours = classify(load_hours(params(start, end, borough, zones, services)))
+        return [], theme.empty(), theme.empty(), theme.empty(), []
+    p = params(start, end, borough, zones, services)
+    hours = classify(load_hours(p))
     base = baselines(hours)
     intensity = by_intensity(hours, base)
     day_parts = by_day_part(hours, base)
@@ -331,4 +335,5 @@ def update(start, end, borough, zones, services):
         effects_figure(["Fraca", "Forte"], [(c, intensity[c]) for c in (RAIN, SNOW)]),
         effects_figure([p for p, _, _ in DAY_PARTS], [(c, day_parts[c]) for c in (RAIN, SNOW)]),
         effects_figure(temp_labels, [(DRY, temp_rows)]),
+        coverage.notice(coverage.load(p, weather=True)),
     )

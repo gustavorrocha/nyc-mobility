@@ -6,6 +6,13 @@ having count(*) > 1
 
 union all
 
+select 'data_coverage', count(*)
+from {{ ref('data_coverage') }}
+group by period, service_type
+having count(*) > 1
+
+union all
+
 select 'trip_demand_hourly', count(*)
 from {{ ref('trip_demand_hourly') }}
 group by hour_utc, service_type, pickup_zone_id

@@ -35,8 +35,9 @@ app = Dash(__name__, title="NYC Mobility Explorer", suppress_callback_exceptions
 def filter_options() -> dict:
     """Valores dos filtros globais, lidos do banco a cada carregamento de página."""
     period = query(
-        "SELECT min(hour_local)::date AS first_day, max(hour_local)::date AS last_day "
-        "FROM analytics.trip_demand_hourly"
+        "SELECT min(to_date(period, 'YYYY-MM')) AS first_day, "
+        "(max(to_date(period, 'YYYY-MM')) + interval '1 month - 1 day')::date AS last_day "
+        "FROM analytics.data_coverage"
     )[0]
     zones = query(
         "SELECT zone_id, zone, borough FROM core.zones "

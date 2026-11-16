@@ -9,7 +9,7 @@ from datetime import date, timedelta
 
 from dash import Input, Output, State, callback, html, no_update
 
-from dashboard import theme
+from dashboard import coverage, theme
 from dashboard.db import query
 
 WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
@@ -20,11 +20,12 @@ GEOJSON_URL = "/assets/taxi_zones.geojson"
 NYC_CENTER = {"lat": 40.70, "lon": -73.94}
 
 SOURCE = "analytics.trip_demand_hourly AS d JOIN core.zones AS z ON z.zone_id = d.pickup_zone_id"
-WHERE = """
+WHERE = f"""
     d.hour_local >= %(start)s AND d.hour_local < %(end)s
     AND d.service_type = ANY(%(services)s)
     AND (%(borough)s::text IS NULL OR z.borough = %(borough)s)
     AND (%(zones)s::int[] IS NULL OR d.pickup_zone_id = ANY(%(zones)s))
+    AND d.period IN ({coverage.COVERED_PERIODS})
 """
 
 
@@ -49,7 +50,8 @@ def days_in(p: dict) -> list[date]:
 def load_kpis(p: dict) -> dict:
     """Totais e médias; as médias usam só corridas com métricas plausíveis (measured)."""
     return query(
-        f"""SELECT sum(d.trip_count)::bigint AS trips,
+        f"""SELECT CASE WHEN EXISTS ({coverage.COVERED_PERIODS})
+                       THEN coalesce(sum(d.trip_count), 0)::bigint END AS trips,
                    sum(d.measured_trip_count)::bigint AS measured,
                    sum(d.duration_min_sum) / nullif(sum(d.measured_trip_count), 0) AS duration_min,
                    sum(d.distance_miles_sum) / nullif(sum(d.measured_trip_count), 0)
@@ -63,13 +65,14 @@ def load_kpis(p: dict) -> dict:
 
 
 def load_trend(p: dict, grain: str) -> list[dict]:
-    """Corridas por hora ou dia, com zero nos intervalos sem corridas."""
+    """Zero em horas cobertas sem corridas; NULL em meses sem cobertura."""
     return query(
         f"""WITH demand AS (
                 SELECT date_trunc(%(grain)s, d.hour_local) AS t, sum(d.trip_count)::bigint AS trips
                 FROM {SOURCE} WHERE {WHERE} GROUP BY 1
             )
-            SELECT s.t, coalesce(demand.trips, 0) AS trips
+            SELECT s.t, CASE WHEN to_char(s.t, 'YYYY-MM') IN ({coverage.COVERED_PERIODS})
+                       THEN coalesce(demand.trips, 0) END AS trips
             FROM generate_series(
                 %(start)s::timestamp, %(end)s::timestamp - %(step)s::interval, %(step)s::interval
             ) AS s(t)
@@ -116,12 +119,12 @@ def _money(value, decimals: int = 0) -> str:
 
 
 def kpi_tiles(k: dict, n_days: int) -> list:
-    per_day = k["trips"] / n_days if k["trips"] and n_days else None
+    per_day = k["trips"] / n_days if k["trips"] is not None and n_days else None
     coverage = k["measured"] / k["trips"] if k["trips"] else None
     base = f"base: {theme.number(100 * coverage, 1)}% das corridas" if coverage else "por corrida"
     return theme.kpi_cards(
         [
-            ("Corridas", theme.number(k["trips"]), f"{theme.number(per_day)} por dia"),
+            ("Corridas", theme.number(k["trips"]), f"{theme.number(per_day)} por dia coberto"),
             ("Duração média", f"{theme.number(k['duration_min'], 1)} min", base),
             ("Distância média", f"{theme.number(k['distance_mi'], 2)} mi", "por corrida"),
             ("Velocidade média", f"{theme.number(k['speed_mph'], 1)} mph", "distância / tempo"),
@@ -131,7 +134,7 @@ def kpi_tiles(k: dict, n_days: int) -> list:
 
 
 def trend_figure(rows: list[dict], grain: str):
-    if not any(r["trips"] for r in rows):
+    if not any(r["trips"] is not None for r in rows):
         return theme.empty()
     fmt = "%d/%m/%Y %Hh" if grain == "hour" else "%d/%m/%Y"
     fig = theme.figure(hovermode="x unified")
@@ -139,6 +142,7 @@ def trend_figure(rows: list[dict], grain: str):
         x=[r["t"] for r in rows],
         y=[r["trips"] for r in rows],
         mode="lines",
+        connectgaps=False,
         line={"color": theme.BLUE, "width": 2},
         fill="tozeroy",
         fillcolor="rgba(42, 120, 214, 0.08)",
@@ -250,6 +254,7 @@ def map_figure(rows: list[dict], selected: list[int] | None):
 
 def layout() -> list:
     return [
+        html.Div(id="m-coverage"),
         html.Div(id="m-kpis", className="kpis"),
         html.Div(
             className="charts",
@@ -290,6 +295,7 @@ def layout() -> list:
     Output("m-trend", "figure"),
     Output("m-heatmap", "figure"),
     Output("m-ranking", "figure"),
+    Output("m-coverage", "children"),
     Input("f-period", "start_date"),
     Input("f-period", "end_date"),
     Input("f-borough", "value"),
@@ -298,15 +304,17 @@ def layout() -> list:
 )
 def update(start, end, borough, zones, services):
     if not start or not end:
-        return [], theme.empty(), theme.empty(), theme.empty()
+        return [], theme.empty(), theme.empty(), theme.empty(), []
     p = params(start, end, borough, zones, services)
-    days = days_in(p)
-    grain = "hour" if len(days) <= HOURLY_MAX_DAYS else "day"
+    rows = coverage.load(p)
+    days = coverage.covered_days(p, rows)
+    grain = "hour" if len(days_in(p)) <= HOURLY_MAX_DAYS else "day"
     return (
         kpi_tiles(load_kpis(p), len(days)),
         trend_figure(load_trend(p, grain), grain),
         heatmap_figure(load_heatmap(p), days),
         ranking_figure(load_ranking(p)),
+        coverage.notice(rows),
     )
 
 
