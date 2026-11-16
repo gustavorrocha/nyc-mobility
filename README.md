@@ -85,7 +85,7 @@ O Prometheus avalia `ExportadorIndisponivel` a cada 15 segundos. Se a coleta do 
 `nyc_mobility` falhar continuamente por dois minutos, o alerta passa de `pending` para
 `firing`; quando a coleta volta a funcionar, ele se resolve. Os dois minutos são um valor
 didático para este ambiente local. Consulte <http://127.0.0.1:9090/alerts> para ver o estado.
-O alerta aparece no Prometheus, mas **não envia notificações**: ainda não configuramos Alertmanager.
+O alerta aparece no Prometheus e é encaminhado ao Alertmanager descrito abaixo.
 
 Para investigar, confira `docker compose ps metrics-exporter postgres`, os logs com
 `docker compose logs --tail=50 metrics-exporter` e o alvo em
@@ -96,6 +96,23 @@ próprio Prometheus parar nem se a ingestão falhar. A regra e seus cenários es
 ```bash
 docker compose --profile observability run --rm --no-deps --entrypoint promtool prometheus test rules /etc/prometheus/alerts_test.yml
 ```
+
+### Alertmanager local
+
+```bash
+docker compose --profile observability up -d alertmanager
+docker compose --profile observability restart prometheus
+```
+
+O Prometheus avalia as regras e envia alertas ativos ao Alertmanager. Ele os agrupa por
+`alertname` e permite consultá-los ou silenciá-los em <http://127.0.0.1:9093>. O volume
+`alertmanager-data` preserva os silêncios entre reinícios. O receptor `local` é um receptor
+sem integração: **nenhuma notificação externa é enviada**. As durações de agrupamento estão
+em `observability/alertmanager.yml` e passam a controlar notificações quando houver um destino.
+
+Para investigar o encaminhamento, confira os serviços com
+`docker compose ps prometheus alertmanager` e o campo “Alertmanagers” em
+<http://127.0.0.1:9090/status>. Para parar o serviço: `docker compose stop alertmanager`.
 
 ## Comandos de validação
 

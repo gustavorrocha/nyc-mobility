@@ -30,6 +30,20 @@ x-airflow-common: &airflow-common
       condition: service_healthy
 
 services:
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:12.4.0
     profiles: ["observability"]
@@ -176,3 +190,4 @@ volumes:
   postgres-data:
   prometheus-data:
   grafana-data:
+  alertmanager-data:
