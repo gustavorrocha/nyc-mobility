@@ -3,7 +3,7 @@
 import psycopg
 from dash import Dash, Input, Output, State, dcc, html
 
-from dashboard import climate, mobility, pipeline
+from dashboard import climate, comparisons, mobility, pipeline
 from dashboard.db import query
 
 # Rota -> (título, descrição, conteúdo da página).
@@ -11,7 +11,7 @@ PAGES = {
     "/": (
         "Mobilidade urbana",
         "Demanda, distâncias, durações, tarifas e zonas de embarque das corridas válidas.",
-        mobility.layout,
+        lambda: [*mobility.layout(), *comparisons.service_layout()],
     ),
     "/clima": (
         "Mobilidade e clima",

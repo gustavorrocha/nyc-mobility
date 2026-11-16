@@ -175,6 +175,19 @@ por outra migração com o mesmo identificador.
 - Pipeline Health separa o histórico de ingestões do histórico de transformações dbt e mostra
   competências validadas na execução, resultados de modelos/testes e falhas.
 
+### Comparações
+
+- Na página Mobilidade urbana, a comparação entre modalidades mostra uma série de demanda
+  por modalidade, participação nas corridas selecionadas e médias de duração, distância,
+  velocidade e valor. A tabela informa a fração de corridas usada nas médias; métricas ausentes
+  ficam vazias. As tarifas/componentes diferem entre modalidades e não equivalem a lucro ou
+  remuneração do motorista.
+- As séries e participações usam somente meses cobertos em **todas** as modalidades
+  selecionadas, respeitando distrito e zonas. Participação é relativa à seleção, não ao mercado
+  inteiro. A seleção inicial inclui apenas modalidades que já têm dados disponíveis.
+- Para usar esta versão, execute `nyc-mobility build` e reconstrua o dashboard. A incorporação
+  das modalidades não baixa competências automaticamente; use a CLI ou a DAG para carregá-las.
+
 ## Observações
 
 - O repositório pode estar em uma pasta sincronizada (ex.: OneDrive). Recomenda-se excluir
