@@ -31,7 +31,26 @@ do Airflow (`airflow-init`) e do projeto (`migrate`) e inicia o Airflow 3.4 com 
 - UI do Airflow: <http://127.0.0.1:8080> (sem login; somente para desenvolvimento local).
 - PostgreSQL: `127.0.0.1:5432` (porta configurável por `POSTGRES_HOST_PORT`).
 
-## Observabilidade: primeiro contato com Prometheus
+## Observabilidade local
+
+Com o `.env` configurado e o banco migrado, suba o conjunto completo:
+
+```bash
+docker compose --profile observability up -d --build prometheus metrics-exporter grafana alertmanager mailpit
+```
+
+| Serviço | Acesso local | Papel |
+|---|---|---|
+| Prometheus | <http://127.0.0.1:9090> | Coleta, consultas e avaliação de regras |
+| Grafana | <http://127.0.0.1:3000/d/nyc-publication> | Painel da publicação, coleta e builds |
+| Alertmanager | <http://127.0.0.1:9093> | Agrupamento e encaminhamento de alertas |
+| Mailpit | <http://127.0.0.1:8025> | Caixa de teste de notificações |
+
+O exportador acessa o PostgreSQL como `dashboard_reader` e só fica acessível pela rede
+do Compose. A observabilidade é opcional e não participa da execução da ingestão/dbt.
+As portas das interfaces são restritas a `127.0.0.1`; a configuração é para uso local.
+
+### Primeiro contato com Prometheus
 
 ```bash
 docker compose --profile observability up -d prometheus
@@ -198,6 +217,11 @@ uv run --env-file .env dbt debug --project-dir dbt --profiles-dir dbt
 (service container; no CI os testes de integração falham em vez de serem pulados), `dbt build`
 sobre fixtures (dentro do Pytest), migrações + `db check` e build da imagem do Airflow (sem push
 nem deploy).
+
+O job `observability` valida o Compose, as configurações com `promtool`/`amtool`, os
+cenários das regras de alerta e a criação real da fonte de dados e dos quatro painéis
+no Grafana descartável. Ele não consulta dados do projeto nem executa o teste SMTP de
+vários minutos; este pode ser repetido com `scripts/testar_notificacao_local.py`.
 
 ## Transformação (dbt)
 
