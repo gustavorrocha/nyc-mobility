@@ -129,6 +129,17 @@ de teste. As mensagens ficam em memória e são perdidas ao recriar ou reiniciar
 O agrupamento aguarda 30 segundos antes da primeira notificação. Para parar a caixa:
 `docker compose stop mailpit`.
 
+Para testar os dois estados sem interromper o pipeline, execute no host:
+
+```bash
+python scripts/testar_notificacao_local.py
+```
+
+O script cria um alerta sintético com identificador único, espera o e-mail `[FIRING]`,
+encerra o alerta e espera o e-mail `[RESOLVED]`. A recuperação pode demorar até cinco
+minutos por causa de `group_interval`; ambas as mensagens ficam no Mailpit. O teste não
+verifica a regra de coleta do Prometheus, que tem seus próprios testes com `promtool`.
+
 ## Comandos de validação
 
 ```bash
