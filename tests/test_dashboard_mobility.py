@@ -37,7 +37,7 @@ def test_kpi_tiles_format_pt_br_and_handle_no_data():
         "12,6 mph",
         "US$ 26,05",
     ]
-    assert tiles[0].children[2].children == "119.534 por dia"
+    assert tiles[0].children[2].children == "119.534 por dia coberto"
     assert tiles[1].children[2].children == "base: 95,3% das corridas"
     empty = mobility.kpi_tiles(dict.fromkeys(k), 59)
     assert [t.children[1].children for t in empty] == ["—", "— min", "— mi", "— mph", "—"]
@@ -67,7 +67,7 @@ def test_ranking_keeps_homonymous_zones_apart():
 
 def test_empty_results_render_message():
     for fig in (
-        mobility.trend_figure([{"t": datetime(2025, 1, 1), "trips": 0}], "day"),
+        mobility.trend_figure([{"t": datetime(2025, 1, 1), "trips": None}], "day"),
         mobility.heatmap_figure([], [date(2025, 1, 1)]),
         mobility.ranking_figure([]),
     ):
@@ -75,9 +75,10 @@ def test_empty_results_render_message():
 
 
 def test_update_without_period_returns_empty_page():
-    kpis, *figures = mobility.update(None, None, None, None, ["yellow"])
+    kpis, *figures, notice = mobility.update(None, None, None, None, ["yellow"])
     assert len(figures) == 3  # um valor por Output (o Dash não aceita listas aninhadas)
     assert kpis == [] and all(f.layout.annotations for f in figures)
+    assert notice == []
 
 
 def test_map_uses_log_scale_and_highlights_selected_zones():

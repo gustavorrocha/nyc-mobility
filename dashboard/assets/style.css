@@ -124,3 +124,7 @@ body { margin: 0; }
 .tone-critical { color: #d03b3b; font-weight: 600; }
 .tone-warning { color: #946300; font-weight: 600; }
 .tone-muted { color: var(--muted); }
+
+.coverage { margin-bottom: 16px; font-size: 0.85rem; }
+.coverage summary { cursor: pointer; }
+.coverage summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }

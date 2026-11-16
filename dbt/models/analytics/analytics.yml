@@ -1,6 +1,24 @@
 version: 2
 
 models:
+  - name: data_coverage
+    description: Cobertura mensal por modalidade, conciliada com a versão atual dos insumos.
+    columns:
+      - name: period
+        data_tests: [not_null]
+      - name: service_type
+        data_tests: [not_null]
+      - name: status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments: {values: [available, pending, missing]}
+      - name: weather_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments: {values: [available, pending, missing]}
+
   - name: trip_demand_hourly
     description: >
       Corridas válidas por hora de embarque (UTC), modalidade e zona de embarque. Métricas em

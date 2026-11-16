@@ -63,8 +63,8 @@ nem deploy).
 ## Transformação (dbt)
 
 ```bash
-docker compose exec airflow-scheduler dbt build        # ou, no host:
-uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
+docker compose exec airflow-scheduler nyc-mobility build    # ou, no host:
+uv run --env-file .env nyc-mobility build
 ```
 
 | Modelo | Grão | Observações |
@@ -75,9 +75,25 @@ uv run --env-file .env dbt build --project-dir dbt --profiles-dir dbt
 | `core.weather_hourly` | hora UTC | Semântica da fonte: acumulados referem-se à hora anterior a `observed_at_utc` |
 | `analytics.trip_demand_hourly` | hora × modalidade × zona de embarque | Apenas corridas válidas; métricas em somas (`duration_min_sum`, `distance_miles_sum`, `amount_sum`) e `measured_trip_count` (corridas sem `metric_issue`), somáveis em qualquer recorte: média = soma / `measured_trip_count` |
 | `analytics.trip_weather_hourly` | hora `[hour_utc, +1h)` | Viagens válidas e clima da hora, inclusive horas sem corrida; médias de duração, distância, velocidade (`avg_speed_mph`) e valor (`avg_amount`) só das corridas sem `metric_issue`; instantâneas no início da hora, acumulados da observação seguinte (`NULL` na última hora sem a competência seguinte) |
+| `analytics.data_coverage` | competência × modalidade | View que concilia a versão atual dos insumos com `trip_quality` e demanda; distingue disponível, sem carga e aguardando transformação; também verifica a versão e a cobertura horária do clima |
+
+- `nyc-mobility build` executa o projeto dbt inteiro e persiste início, fim, versões dos insumos,
+  status, resultados de modelos/testes e competências disponíveis após sucesso em
+  `metadata.analytics_runs`. `--period AAAA-MM` identifica a solicitação (como na DAG), sem
+  restringir o processamento incremental. `--full-refresh` reconstrói todos os modelos.
+- A CLI e a tarefa `dbt_build` do Airflow usam o mesmo comando rastreado. Um advisory lock
+  impede dois builds rastreados simultâneos; cada execução usa um target temporário próprio,
+  para nunca reaproveitar o artefato de uma execução anterior. Falta de artefato também é falha.
+  Mudança nas versões dos insumos durante o build impede marcar a execução como validada.
+- O resultado por modelo/teste vem do artefato oficial
+  [`run_results.json`](https://docs.getdbt.com/reference/artifacts/run-results-json). Invocações
+  diretas de `dbt build` continuam possíveis, mas não registram histórico nem participam do lock.
+- Os resultados registrados são históricos: não tornam atômica a publicação entre modelos.
+  Se o processo for encerrado à força, o registro pode permanecer `running`; conferir os logs
+  do Airflow antes de reexecutar. Não há sucesso presumido para execuções anteriores à migração.
 
 - **Incremental por competência** nos modelos transacionais (`core.trips`,
-  `core.weather_hourly`, `analytics.*`); cadastros (`zones`, `service_types`) são reconstruídos
+  `core.weather_hourly`, agregados `analytics`); cadastros (`zones`, `service_types`) são reconstruídos
   inteiros. Cada linha guarda em `source_version` a versão dos insumos da sua competência
   (arquivo publicado em `metadata.ingestion_runs`, cadastro de zonas e, no viagens x clima, o
   clima do mês seguinte). Um `dbt build` reprocessa (delete+insert por `period`) só as
@@ -120,6 +136,35 @@ docker compose exec airflow-scheduler nyc-mobility ingest --dataset tlc.taxi_zon
 
 Parar o ambiente: `docker compose down` (preserva o volume `postgres-data`; **não** use `-v`
 a menos que queira apagar os bancos).
+
+## Dashboard e cobertura
+
+```bash
+docker compose up -d --build dashboard
+# Ou no host:
+uv run --env-file .env python -m dashboard
+```
+
+Acesse <http://127.0.0.1:8050>. Aplique as migrações (`nyc-mobility db upgrade`) e execute
+`nyc-mobility build` antes de usar esta versão do dashboard. Para o Airflow, reconstrua também
+a imagem dos serviços após atualizar o código do pacote.
+
+A migração de rastreamento é a `0006`. A `0005` original (tabelas raw das demais modalidades)
+é preservada para compatibilidade com bancos que já a receberam; ela não deve ser substituída
+por outra migração com o mesmo identificador.
+
+- Mobilidade urbana e Mobilidade e clima mostram a cobertura de cada mês/modalidade
+  selecionados, independentemente do distrito ou zona. Os indicadores usam apenas meses
+  disponíveis em **todas** as modalidades selecionadas; o clima exige também sua versão atual
+  e o número esperado de horas (incluindo DST).
+- Mês sem carga não vira zero. Mês carregado e transformado sem corridas válidas é zero,
+  inclusive quando o filtro de zona não encontra corridas. A demanda temporal mantém lacunas
+  onde falta cobertura; médias diárias e heatmap usam somente dias cobertos.
+- Cobertura verifica completude técnica da carga, versões e conciliação; não garante que o
+  arquivo publicado pela TLC contenha todas as corridas reais. Horas sem precipitação
+  conhecida continuam fora das comparações climáticas.
+- Pipeline Health separa o histórico de ingestões do histórico de transformações dbt e mostra
+  competências validadas na execução, resultados de modelos/testes e falhas.
 
 ## Observações
 

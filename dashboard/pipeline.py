@@ -54,6 +54,15 @@ def load_runs() -> list[dict]:
     )
 
 
+def load_builds() -> list[dict]:
+    return query(
+        """SELECT run_id, period, status, started_at, finished_at, validated_periods,
+                  node_results, error,
+                  extract(epoch FROM finished_at - started_at)::float8 AS seconds
+           FROM metadata.analytics_runs ORDER BY run_id DESC LIMIT 20"""
+    )
+
+
 def load_quality() -> list[dict]:
     return query(
         """SELECT period, status, reason, sum(trip_count)::bigint AS trips
@@ -321,6 +330,45 @@ RUN_COLUMNS = [
     ("flagged", "Sinalizadas"),
     ("message", "Motivo / erro"),
 ]
+BUILD_COLUMNS = [
+    ("run_id", "#"),
+    ("status", "Status dbt"),
+    ("period", "Solicitação"),
+    ("validated", "Competências validadas"),
+    ("started", "Início"),
+    ("finished", "Fim"),
+    ("seconds", "Duração (s)"),
+    ("nodes", "Modelos / testes"),
+    ("message", "Falhas / erro"),
+]
+
+
+def build_rows(builds: list[dict]) -> list[dict]:
+    rows = []
+    for b in builds:
+        results = b["node_results"]
+        models = sum(r["unique_id"].startswith("model.") for r in results)
+        tests = sum(r["unique_id"].startswith("test.") for r in results)
+        problems = [
+            f"{r['unique_id']}: {r['status']} — {r['message'] or ''}"
+            for r in results
+            if r["status"] not in {"success", "pass"}
+        ]
+        rows.append(
+            {
+                "run_id": b["run_id"],
+                "status": f"{STATUS[b['status']][1]} {STATUS[b['status']][0]}",
+                "period": b["period"] or "Projeto inteiro",
+                "validated": ", ".join(b["validated_periods"]) or "—",
+                "started": _when(b["started_at"]),
+                "finished": _when(b["finished_at"]),
+                "seconds": "—" if b["seconds"] is None else theme.number(b["seconds"], 1),
+                "nodes": f"{models} / {tests}",
+                "message": " · ".join(filter(None, [b["error"], *problems])),
+                "_tone": TONE[b["status"]],
+            }
+        )
+    return rows
 
 
 def reconciliation_rows(recon: list[dict]) -> list[dict]:
@@ -384,6 +432,14 @@ def layout() -> list:
         html.Div(
             className="charts",
             children=[
+                _section(
+                    "Transformações e validações dbt",
+                    "As 20 execuções rastreadas mais recentes. Sucesso na ingestão não garante "
+                    "sucesso aqui. Competências validadas referem-se à versão da execução; "
+                    "a cobertura nas páginas analíticas indica se ela continua atual. "
+                    "Execuções anteriores ao rastreamento não são inferidas como validadas.",
+                    "p-builds-body",
+                ),
                 theme.chart_card(
                     "Execuções das ingestões",
                     "p-timeline",
@@ -422,6 +478,7 @@ def layout() -> list:
     Output("p-recon-body", "children"),
     Output("p-quality", "figure"),
     Output("p-runs-body", "children"),
+    Output("p-builds-body", "children"),
     Input("url", "pathname"),
 )
 def update(pathname):
@@ -434,5 +491,10 @@ def update(pathname):
         quality_figure(quality),
         _table(
             RUN_COLUMNS, run_rows(runs), left=("status", "dataset", "period", "started", "message")
+        ),
+        _table(
+            BUILD_COLUMNS,
+            build_rows(load_builds()),
+            left=("status", "period", "validated", "started", "finished", "message"),
         ),
     )

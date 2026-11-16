@@ -110,5 +110,6 @@ def test_cards_and_figures_render():
 
 
 def test_update_without_period_returns_empty_page():
-    cards, *figures = climate.update(None, None, None, None, ["yellow"])
+    cards, *figures, notice = climate.update(None, None, None, None, ["yellow"])
     assert cards == [] and len(figures) == 3
+    assert notice == []
