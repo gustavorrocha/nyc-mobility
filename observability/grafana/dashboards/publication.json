@@ -17,6 +17,27 @@
       ],
       "fieldConfig": {"defaults": {"unit": "h", "decimals": 1, "noValue": "Sem dados"}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "id": 2,
+      "title": "Última coleta do exportador",
+      "description": "Mostra o resultado da última coleta; o alerta só dispara após dois minutos de falha contínua.",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "up{job=\"nyc_mobility\"}", "instant": true}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Sem dados",
+          "mappings": [
+            {"type": "value", "options": {"0": {"text": "Falha", "color": "red"}, "1": {"text": "Coleta OK", "color": "green"}}}
+          ]
+        },
+        "overrides": []
+      },
+      "options": {"colorMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     }
   ]
 }

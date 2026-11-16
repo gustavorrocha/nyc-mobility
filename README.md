@@ -73,7 +73,10 @@ Abra <http://127.0.0.1:3000/d/nyc-publication> para ver as horas desde a última
 publicação. O Grafana consulta o Prometheus pela rede do Compose; a fonte de dados e o
 painel são criados a partir dos arquivos versionados em `observability/grafana/`.
 O painel usa a mesma expressão PromQL mostrada acima e mostra “Sem dados” quando não
-há amostra. A visualização anônima é apenas para desenvolvimento local, na porta 3000
+há amostra. Um segundo indicador consulta `up{job="nyc_mobility"}`: `1` aparece como
+“Coleta OK” e `0` como “Falha”; sem série, mostra “Sem dados”. Esse resultado reflete a
+última coleta, enquanto o alerta abaixo espera dois minutos de falha contínua.
+A visualização anônima é apenas para desenvolvimento local, na porta 3000
 restrita ao computador. Para parar o Grafana: `docker compose stop grafana`.
 
 ### Primeiro alerta
