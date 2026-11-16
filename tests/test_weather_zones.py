@@ -57,10 +57,10 @@ def test_url_requests_era5_unixtime_for_the_local_month():
     url = openmeteo.url("2025-02")
     for part in (
         "start_date=2025-02-01",
-        "end_date=2025-02-28",
+        "end_date=2025-03-01",
         "models=era5",
         "timeformat=unixtime",
-        "timezone=America%2FNew_York",
+        "timezone=GMT",
     ):
         assert part in url
 
@@ -167,3 +167,18 @@ def test_periodicity_is_enforced():
         ingest("tlc.taxi_zones", "2025-01")
     with pytest.raises(ValueError, match="Competência inválida"):
         ingest("openmeteo.era5", None)
+
+
+@pytest.mark.parametrize("period", ["2025-03", "2025-11"])
+def test_utc_response_is_cropped_to_exact_local_month(period):
+    expected = openmeteo.expected_hours(period)
+    start = expected[0] // 86400 * 86400
+    end = (expected[-1] // 86400 + 1) * 86400
+    times = list(range(start, end, 3600))
+    hourly = {"time": times, **{v: list(times) for v in openmeteo.VARIABLES}}
+    result = openmeteo.validate({"hourly": hourly}, period)
+    assert result["time"] == expected
+    assert result["temperature_2m"] == expected
+    hourly["time"][10] = hourly["time"][9]
+    with pytest.raises(ContractError):
+        openmeteo.validate({"hourly": hourly}, period)
