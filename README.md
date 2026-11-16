@@ -43,9 +43,25 @@ health**, confira o alvo `prometheus` e seu estado. O arquivo
 [`observability/prometheus.yml`](observability/prometheus.yml) configura uma coleta a
 cada 15 segundos; o volume `prometheus-data` preserva o histórico entre reinícios.
 
-Neste primeiro passo o Prometheus monitora apenas a si mesmo: `up` não representa
-a saúde da ingestão. Nos próximos passos adicionaremos as métricas do pipeline,
-o Grafana e um alerta. Para parar o serviço: `docker compose stop prometheus`.
+Suba também o exportador para consultar a última publicação validada:
+
+```bash
+docker compose --profile observability up -d --build metrics-exporter
+```
+
+O exportador lê `metadata.analytics_publication` com o usuário de leitura do dashboard e
+expõe `nyc_mobility_publication_timestamp_seconds`, um instante Unix em segundos. O Prometheus
+consulta `/metrics` a cada 15 segundos. Execute `up{job="nyc_mobility"}` para verificar a
+coleta; `1` indica que o exportador e sua consulta ao banco responderam. Para saber quantas
+horas se passaram desde a publicação, consulte:
+
+```promql
+(time() - nyc_mobility_publication_timestamp_seconds) / 3600
+```
+
+Sem publicação, não há amostra da métrica; erro no banco faz a coleta falhar, em vez de
+inventar um valor. Essa métrica não indica se a TLC publicou novos arquivos ou se a ingestão
+falhou. Para parar os dois serviços: `docker compose stop prometheus metrics-exporter`.
 
 ## Comandos de validação
 

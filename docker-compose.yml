@@ -40,6 +40,25 @@ services:
       - prometheus-data:/prometheus
     restart: unless-stopped
 
+  metrics-exporter:
+    profiles: ["observability"]
+    build:
+      context: .
+      dockerfile: docker/dashboard/Dockerfile
+    image: nyc-mobility-dashboard:local
+    command: ["python", "-m", "dashboard.metrics"]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-nyc_mobility}
+      DASHBOARD_DB_PASSWORD: ${DASHBOARD_DB_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   postgres:
     image: postgres:17
     environment:
