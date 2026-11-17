@@ -3,6 +3,9 @@
 Pipeline local de dados de mobilidade de NYC (TLC + Open-Meteo). Arquitetura e plano de
 implementação: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+O escopo local de estudo está concluído. Consulte também o
+[panorama da observabilidade](OBSERVABILITY.md), com o fluxo, decisões e limites da entrega.
+
 ## Estrutura
 
 | Caminho | Conteúdo |
@@ -144,7 +147,8 @@ Abra <http://127.0.0.1:8025> para ver as mensagens de alerta e de recuperação.
 Alertmanager envia por SMTP para `mailpit:1025` na rede interna; a porta SMTP não é
 publicada no host. Os endereços `example.test` são fictícios e o Mailpit captura os
 e-mails localmente, sem encaminhá-los. A conexão SMTP sem TLS é apenas para este ambiente
-de teste. As mensagens ficam em memória e são perdidas ao recriar ou reiniciar o Mailpit.
+de teste. Não há volume persistente configurado para a caixa: as mensagens são descartáveis
+e não devem ser tratadas como histórico durável.
 O agrupamento aguarda 30 segundos antes da primeira notificação. Para parar a caixa:
 `docker compose stop mailpit`.
 
@@ -265,8 +269,8 @@ uv run --env-file .env nyc-mobility build
   viagens; clima do mês seguinte → o viagens x clima do mês anterior.
 - `dbt build --full-refresh` reconstrói tudo (necessário após mudar a estrutura de um modelo ou
   um limite `metric_*`).
-- Desvio registrado do `ARCHITECTURE.md` (item 5.3 previa tabelas reconstruídas no MVP):
-  incremental adotado por decisão do projeto. Os testes dbt ainda varrem as tabelas inteiras.
+- O processamento incremental está refletido no `ARCHITECTURE.md` (seção 4.5).
+  Os testes dbt ainda varrem as tabelas inteiras.
 - Testes garantem que `core.trips` concilia com `raw` por competência.
 - Limitação aceita: na volta do horário de verão, 01:00–01:59 local ocorre duas vezes e a TLC
   não informa o fuso; a conversão para UTC escolhe sempre a mesma ocorrência.
@@ -330,6 +334,7 @@ por outra migração com o mesmo identificador.
   selecionados, independentemente do distrito ou zona. Os indicadores usam apenas meses
   disponíveis em **todas** as modalidades selecionadas; o clima exige também sua versão atual
   e o número esperado de horas (incluindo DST).
+  O adaptador climático solicita dias UTC completos e recorta as horas do mês local de NY.
 - Mês sem carga não vira zero. Mês carregado e transformado sem corridas válidas é zero,
   inclusive quando o filtro de zona não encontra corridas. A demanda temporal mantém lacunas
   onde falta cobertura; médias diárias e heatmap usam somente dias cobertos.
@@ -347,7 +352,8 @@ por outra migração com o mesmo identificador.
 - O dashboard usa apenas essas tabelas de consumo; Pipeline Health continua observando os
   metadados e os modelos de trabalho, e identifica a publicação atual. O cabeçalho informa a
   data da última validação. Sem uma primeira publicação, a interface orienta executar o build.
-- Cada callback lê em uma transação `REPEATABLE READ`. A publicação usa `DELETE` + `INSERT`,
+- Callbacks analíticos que combinam consultas usam uma transação `REPEATABLE READ`.
+  A publicação usa `DELETE` + `INSERT`,
   preservando as versões visíveis a leitores em andamento; não usa `TRUNCATE` nem substitui
   tabelas de consumo durante a atualização. Referência: [isolamento no PostgreSQL 17](https://www.postgresql.org/docs/17/transaction-iso.html).
 - A cobertura do dashboard passa a descrever a **publicação validada**, não uma carga raw

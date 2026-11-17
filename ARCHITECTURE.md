@@ -1,16 +1,17 @@
 # NYC Mobility Pipeline — Arquitetura
 
-**Status:** 20 decisões arquiteturais aprovadas (7 de engenharia + 7 operacionais + 6 de execução) · **Atualizado em:** 06/11/2026  
-**Fase:** planejamento; implementação condicionada à aprovação de cada etapa, conforme a seção 7.
+**Status:** implementação concluída para o escopo local de estudo · **Atualizado em:** 16/11/2026
+
+**Fase:** encerramento. Evoluções opcionais e limites estão na seção 8; operação no README.
 
 ## 1. Objetivo e escopo
 
-Construir um pipeline de dados local, reproduzível e modular para integrar corridas da **NYC Taxi & Limousine Commission (TLC)** e dados meteorológicos históricos da **Open-Meteo**. O MVP implementará **Yellow Taxi** e clima; a arquitetura permitirá adicionar **Green Taxi, FHV e HVFHV** sem remodelar os indicadores comuns.
+Construir um pipeline de dados local, reproduzível e modular para integrar corridas da **NYC Taxi & Limousine Commission (TLC)** e dados meteorológicos históricos da **Open-Meteo**. A implementação integra **Yellow Taxi, Green Taxi, FHV e HVFHV** e clima, com dashboard analítico e observabilidade local.
 
-- **Período inicial:** janeiro e fevereiro de 2025, começando por uma competência para validar o fluxo.
+- **Período:** validação inicial em janeiro e fevereiro/2025; descoberta diária desde janeiro/2025 até o último mês completo, respeitando a disponibilidade das fontes.
 - **Análises iniciais:** demanda, distância, duração e associação com o clima por hora e zona; foco analítico inicial em Manhattan.
 - **Escopo de ingestão:** preservar corridas de toda Nova York; filtrar Manhattan nas consultas/modelos analíticos, não descartar outras zonas na origem.
-- **Fora do MVP:** frontend, predição, cluster Spark, infraestrutura cloud, deploy automático em produção e integração das demais modalidades.
+- **Fora do escopo entregue:** predição, cluster Spark, infraestrutura cloud e deploy automático em produção.
 
 ## 2. Tecnologias e decisões de engenharia aprovadas (05/11/2026)
 
@@ -19,10 +20,10 @@ Construir um pipeline de dados local, reproduzível e modular para integrar corr
 | Organização | **Monorepo modular** | Código de ingestão, DAGs, dbt, migrações, testes e infraestrutura no mesmo repositório, com módulos independentes por fonte. |
 | CI/CD | **GitHub Actions** | PRs executam lint e testes; build/publicação versionada de imagens é evolução, sem deploy automático no MVP. |
 | Python | **uv + Ruff + Pytest** | Dependências reproduzíveis, lint/formatação e testes automatizados. |
-| Banco e transformação | **Alembic + dbt** | Alembic administra objetos operacionais (`raw` e `metadata`); dbt administra modelos de `core` e `analytics`. |
+| Banco e transformação | **Alembic + dbt** | Alembic administra `raw`, `metadata` e a estrutura de publicação; dbt administra `core` e `analytics`; o build publica os modelos de consumo em `serving`. |
 | Execução | **Local primeiro, via Docker Compose** | Airflow, PostgreSQL e dbt reproduzíveis em desenvolvimento; cloud posteriormente. |
 | Integrações | **Contratos por fonte** | Adaptadores de extração/validação por dataset, com normalização em esquema comum. |
-| Operação | **Observabilidade desde o MVP** | Logs, estado das execuções, contagens, versões e erros no schema `metadata`, sem stack externa de monitoramento. |
+| Operação | **Observabilidade desde o MVP** | Metadados e logs do pipeline, mais perfil opcional local com Prometheus, Grafana, Alertmanager e Mailpit. |
 
 **Princípio:** adoção de práticas profissionais com o menor número de componentes necessário para demonstrar um pipeline confiável.
 
@@ -30,17 +31,18 @@ Construir um pipeline de dados local, reproduzível e modular para integrar corr
 
 **Banco PostgreSQL:** `nyc_mobility`
 
-| Schema | Papel | Tabelas previstas |
+| Schema | Papel | Tabelas principais |
 |---|---|---|
-| `raw` | Dados da origem, separados por fornecedor/dataset | `tlc_yellow_trips`, `tlc_taxi_zones`, `openmeteo_weather_hourly`; futuramente `tlc_green_trips`, `tlc_fhv_trips`, `tlc_hvfhv_trips` |
+| `raw` | Dados da origem, separados por fornecedor/dataset | `tlc_yellow_trips`, `tlc_green_trips`, `tlc_fhv_trips`, `tlc_fhvhv_trips`, `tlc_taxi_zones`, `openmeteo_weather_hourly` |
 | `core` | Dados padronizados e entidades comuns | `trips`, `zones`, `service_types`, `weather_hourly` |
-| `analytics` | Métricas e integrações para consumo analítico | `trip_demand_hourly`, `trip_weather_hourly` |
-| `metadata` | Rastreabilidade e controle do pipeline | `sources`, `source_files`, `ingestion_runs` |
+| `analytics` | Modelos de trabalho agregados | `trip_demand_hourly`, `trip_weather_hourly`, `trip_quality`, `data_coverage` |
+| `metadata` | Rastreabilidade e controle do pipeline | `sources`, `source_files`, `ingestion_runs`, `analytics_runs`, `analytics_publication` |
+| `serving` | Última publicação validada para consumo | Cópias dos agregados e cadastros, publicadas numa transação |
 
 **Convenções:**
 
 - A **origem é explícita em `raw`**; em `core`, os nomes são independentes da fonte.
-- `core.trips` terá uma coluna `service_type` (ex.: `yellow`, `green`, `fhv`, `hvfhv`) e um conjunto de campos comuns, sem presumir que todas as fontes ofereçam tarifas e distâncias comparáveis.
+- `core.trips` terá uma coluna `service_type` (ex.: `yellow`, `green`, `fhv`, `fhvhv`) e um conjunto de campos comuns, sem presumir que todas as fontes ofereçam tarifas e distâncias comparáveis.
 - Informação indisponível será representada por `NULL`, nunca substituída artificialmente por zero.
 - IDs de corrida serão **técnicos e rastreáveis à versão/posição do registro na origem**, sem promessa de identidade estável entre republicações da TLC.
 
@@ -48,7 +50,7 @@ Construir um pipeline de dados local, reproduzível e modular para integrar corr
 
 ```text
 NYC TLC (Parquet/CSV) ─┐
-                      ├─> landing persistente ─> raw ─> core ─> analytics
+                      ├─> landing persistente ─> raw ─> core ─> analytics ─> serving
 Open-Meteo (API) ─────┘                         │
                                               └─> metadata (controle)
 
@@ -69,9 +71,9 @@ dbt: transforma, agrega e testa modelos SQL
 
 - A **unidade de processamento será a competência (AAAA-MM)**, junto da fonte e do dataset; a Open-Meteo fornecerá horas correspondentes ao período solicitado.
 - Cada dataset terá um **adaptador independente**, com contrato de campos, tipos obrigatórios e regras de extração/validação.
-- Yellow Taxi será a primeira modalidade; Green, FHV e HVFHV serão adicionados como novos adaptadores e modelos de normalização.
+- Yellow, Green, FHV e HVFHV têm adaptadores próprios e normalização comum; HVFHV é opcional pelo volume.
 - Para TLC, ler Parquet **em lotes** e carregar o banco via operação em massa (preferencialmente `COPY`), sem transferir o dataset inteiro por memória nem pelo Airflow.
-- O processamento inicial poderá ser disparado manualmente por competência. Uma rotina de descoberta/verificação periódica das publicações é evolução posterior.
+- O processamento pode ser disparado manualmente por competência ou pela descoberta diária de publicações em `scheduled_pipeline`.
 
 ### 4.3. Reprocessamento idempotente e transacional
 
@@ -88,15 +90,15 @@ dbt: transforma, agrega e testa modelos SQL
 - Não embutir parsing de Parquet, contratos, SQL de negócio ou regras de reprocessamento diretamente nas DAGs.
 - Trocar **referências pequenas** entre tarefas (dataset, competência, caminho, hash, IDs de execução), sem trafegar arquivos por XCom.
 - Manter controle de concorrência para impedir duas cargas simultâneas conflitantes da mesma fonte/competência.
-- O MVP terá **uma DAG principal `monthly_pipeline`**; a execução de Python e dbt usará CLIs em processos independentes, conforme a seção 5.
+- Há uma DAG manual `monthly_pipeline` e uma DAG diária `scheduled_pipeline`; a execução de Python e dbt usará CLIs em processos independentes, conforme a seção 5.
 
 ### 4.5. Transformações simples inicialmente
 
 - `raw` preserva a origem e inclui somente campos técnicos necessários à rastreabilidade.
 - `core` padroniza e valida as entidades, unificando modalidades em `core.trips`.
 - `analytics` agrega por hora e zona e integra indicadores de viagens às condições meteorológicas.
-- No MVP, **materializar modelos dbt como tabelas e reconstruí-los de forma controlada** após novas cargas; não começar com lógica incremental complexa em dbt.
-- Reavaliar processamento incremental/particionado de `core` e `analytics` somente quando houver problema real de volume ou desempenho.
+- Modelos transacionais e agregados usam processamento incremental por competência e versão dos insumos. Cadastros são reconstruídos e `data_coverage` é uma view.
+- `--full-refresh` reconstrói os modelos quando houver mudança de estrutura ou critérios de métricas. Os testes dbt continuam verificando o conjunto inteiro.
 
 ### 4.6. Qualidade de dados rastreável
 
@@ -111,7 +113,7 @@ dbt: transforma, agrega e testa modelos SQL
 - Preservar os **timestamps originais da TLC** e normalizar os horários confiáveis para **UTC** em `core`, utilizando `America/New_York`.
 - Obter o histórico meteorológico com timestamps inequívocos (preferencialmente UTC/Unix) e manter documentada sua referência temporal.
 - Para agregação horária, associar viagens ao intervalo de embarque correto e observar que valores horários de **precipitação representam um intervalo acumulado**, diferente de medidas instantâneas como temperatura.
-- **Horários locais ambíguos ou inexistentes nas mudanças de horário de verão não serão convertidos por suposição.** Precisam de tratamento explícito (identificação/sinalização e regra de resolução validada) antes de ampliar o período para esses dias.
+- Horários inexistentes são sinalizados como inválidos; horários ambíguos são identificados e convertidos pela escolha determinística documentada no README. A TLC não informa qual ocorrência do horário repetido foi usada. O clima é consultado em UTC e recortado pelos limites locais de Nova York.
 
 ## 5. Arquitetura de execução — decisões aprovadas (06/11/2026)
 
@@ -127,22 +129,22 @@ dbt: transforma, agrega e testa modelos SQL
 - Usar **Airflow 3 com `LocalExecutor`**, sem Celery, Redis, Kubernetes ou Docker-in-Docker no MVP.
 - Utilizar **um servidor PostgreSQL com dois bancos lógicos separados**: `airflow_metadata` (metadados internos do Airflow) e `nyc_mobility` (dados do projeto).
 - O ambiente Compose terá os serviços necessários ao Airflow 3 (API server, scheduler e processador de DAGs quando exigido pela distribuição adotada) e PostgreSQL; não manter um servidor dbt continuamente ativo.
-- As tarefas de ingestão serão **processos locais acionados pelo Airflow** a partir da CLI do pacote. O **dbt será chamado via CLI** com dependências isoladas das do Airflow (por exemplo, um virtualenv preparado na imagem de tarefas); a escolha concreta do operador e do empacotamento será validada na implementação.
+- As tarefas de ingestão serão **processos locais acionados pelo Airflow** a partir da CLI do pacote. O **dbt será chamado via CLI** com dependências isoladas das do Airflow (por exemplo, um virtualenv preparado na imagem de tarefas); as imagens preparam ambientes separados para o pacote e o dbt; as DAGs usam tarefas Python e BashOperator.
 - O pacote Python e o projeto dbt estarão disponíveis no ambiente que executa as tarefas. O Airflow trocará somente parâmetros/referências pequenas, nunca Parquets via XCom.
 
-### 5.3. Uma DAG mensal no MVP
+### 5.3. Orquestração manual e agendada
 
 - Uma DAG principal chamada **`monthly_pipeline`**, inicialmente disparada **manualmente**, receberá a competência no formato `AAAA-MM`.
-- Para a competência solicitada, executará independentemente as tarefas de ingestão de **Taxi Zones**, **Yellow Taxi** e **Open-Meteo**. O cadastro de zonas é tratado como referência versionada: se sua versão não mudou, a tarefa apenas verifica/omite a recarga.
+- Para a competência solicitada, executará independentemente as tarefas de ingestão de **Taxi Zones**, **Yellow**, **Green**, **FHV** e **Open-Meteo**, com **HVFHV opcional**. O cadastro de zonas é tratado como referência versionada: se sua versão não mudou, a tarefa apenas verifica/omite a recarga.
 - Após o sucesso (ou reconhecimento idempotente de uma carga previamente concluída) de **todas** as fontes necessárias, executar **`dbt build`** para produzir `core` e `analytics` e testar os modelos.
 - Ao final, registrar status e métricas operacionais. Se uma fonte falhar, **não executar dbt com o conjunto mensal incompleto**.
-- Novas modalidades serão acrescentadas como adaptadores e tarefas; a estrutura analítica comum permanece independente do fornecedor.
+- A DAG diária verifica publicações às 09h UTC, sem catchup e com até uma competência pendente por execução por padrão.
 - No MVP haverá **uma execução da DAG ativa por vez**. As ingestões de uma mesma execução poderão ocorrer em paralelo. Reexecuções do dbt não dependem necessariamente de recarregar fontes já válidas.
 
 ```text
 Execução: monthly_pipeline(period=AAAA-MM)
            |                |                   |
-     Taxi Zones       Yellow Taxi           Open-Meteo
+     Taxi Zones      Viagens TLC           Open-Meteo
            |                |                   |
            +----------------+-------------------+
                             |
@@ -166,11 +168,11 @@ Execução: monthly_pipeline(period=AAAA-MM)
 
 ### 5.5. Retries, isolamento de falhas e concorrência
 
-- Falhas transitórias de rede/API terão **retries com backoff**; número de tentativas e intervalos exatos serão parametrizados posteriormente.
+- A DAG manual usa três retries de ingestão, atraso inicial de dois minutos e backoff; o build não tem retry. A diária usa dois retries com atraso inicial de cinco minutos, backoff e timeout de seis horas. Erros de contrato e falhas de build não têm retry imediato.
 - Download incompleto não será promovido à landing válida; erro de contrato interromperá a substituição em `raw`.
 - A detecção de versão já processada (`source + dataset + competência + SHA-256`) resultará em **no-op idempotente**, mas **não bloqueará a etapa analítica**.
 - Arquivos republicados serão carregados/validados em estrutura temporária e substituirão a competência de `raw` **em uma transação**; falhas preservarão a versão anterior.
-- A DAG limitará a concorrência global a uma execução ativa; adicionalmente, o **PostgreSQL terá proteção por fonte/dataset/competência** para evitar cargas conflitantes mesmo se disparadas fora do Airflow (mecanismo exato a definir, por exemplo lock transacional/advisory).
+- A DAG limitará a concorrência global a uma execução ativa; adicionalmente, o **PostgreSQL terá proteção por fonte/dataset/competência** para evitar cargas conflitantes mesmo se disparadas fora do Airflow (advisory lock por fonte/competência).
 - Uma falha no dbt **não desfaz a ingestão `raw` bem-sucedida**. A execução analítica será marcada como falha e poderá ser repetida sem novo download.
 - Os modelos dbt não são publicados atomicamente entre si. Após validação, o build
   publica os modelos de consumo em `serving` numa única transação, conforme a seção 8.
@@ -178,7 +180,7 @@ Execução: monthly_pipeline(period=AAAA-MM)
 ### 5.6. Mesmo código no ambiente local, no Airflow e no CI
 
 - A CLI, os módulos Python e as regras de negócio serão únicos. Desenvolvimento, DAGs e GitHub Actions usarão **as mesmas interfaces**, com diferentes configurações e dados de teste.
-- O CI executará Ruff, Pytest, testes de integração com PostgreSQL e verificações dbt/Alembic quando os componentes existirem.
+- O CI executará Ruff, Pytest, testes de integração com PostgreSQL e verificações dbt/Alembic nos componentes implementados.
 - Testes do CI serão **determinísticos**: usarão Parquets/JSON pequenos e APIs simuladas, sem exigir conexão às fontes públicas.
 - Dependências terão versões controladas por `uv.lock`/configuração de build; comandos externos receberão argumentos explícitos, sem interpolar parâmetros livres em comandos de shell.
 - **Sem deploy automático no MVP**. A possibilidade de publicar imagens versionadas e releases permanece como evolução de CD.
@@ -186,7 +188,7 @@ Execução: monthly_pipeline(period=AAAA-MM)
 ## 6. Desenvolvimento e CI
 
 - Trabalhar com branches curtas e Pull Requests para `main`.
-- CI: Ruff, Pytest e, quando os respectivos componentes existirem, testes de integração com PostgreSQL, validação dbt e migrações Alembic.
+- CI: Ruff, Pytest e, testes de integração com PostgreSQL, validação dbt e migrações Alembic.
 - Manter os testes determinísticos, com pequenos Parquets/JSON simulados; testes com as fontes reais podem ser executados separadamente.
 - **CD no MVP não significa deploy automático:** publicação de imagens e releases pode ser habilitada após estabilização do fluxo local.
 
@@ -243,5 +245,5 @@ Evoluções ainda abertas:
 - Ajustar os tempos didáticos dos alertas a uma política operacional e monitorar falhas
   de ingestão e atraso de dados considerando o calendário de publicação das fontes.
 - Política de retenção/limpeza de arquivos antigos e dimensionamento de disco local.
-- Regra definitiva para resolver horários ambíguos ou inexistentes nas transições do horário de verão da TLC.
+- Desambiguar a hora repetida da TLC exigiria informação que a fonte não fornece; a limitação e a escolha determinística permanecem documentadas.
 - Destino real de notificações e operação fora do ambiente local.
